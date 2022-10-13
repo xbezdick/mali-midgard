@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2010-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2010-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -82,6 +81,7 @@
 #include <mali_kbase_sync.h>
 #endif /* CONFIG_SYNC || CONFIG_SYNC_FILE */
 #include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/delay.h>
 #include <linux/log2.h>
 
@@ -114,9 +114,6 @@ static int kbase_api_handshake(struct kbase_context *kctx,
 			       struct kbase_ioctl_version_check *version)
 {
 	switch (version->major) {
-	case 10: /* we support 10.6 */
-		version->minor = min_t(int, 6, (int)version->minor);
-		break;
 	case BASE_UK_VERSION_MAJOR:
 		/* set minor to be the lowest common */
 		version->minor = min_t(int, BASE_UK_VERSION_MINOR,
@@ -190,689 +187,6 @@ enum {
 	inited_ctx_sched = (1u << 25)
 };
 
-/* Defaults for legacy JIT init ioctl */
-#define DEFAULT_MAX_JIT_ALLOCATIONS 255
-#define JIT_LEGACY_TRIM_LEVEL (0) /* No trimming */
-
-static int kbase_api_mem_jit_init_old(struct kbase_context *kctx,
-		struct kbase_ioctl_mem_jit_init_old *jit_init)
-{
-	kctx->jit_version = 1;
-
-	return kbase_region_tracker_init_jit(kctx, jit_init->va_pages,
-			DEFAULT_MAX_JIT_ALLOCATIONS,
-			JIT_LEGACY_TRIM_LEVEL);
-}
-
-/**
- * kbase_legacy_dispatch - UKK dispatch function
- *
- * This is the dispatch function for the legacy UKK ioctl interface. No new
- * ioctls should be added to this function, see kbase_ioctl instead.
- *
- * @kctx: The kernel context structure
- * @args: Pointer to the data structure passed from/to user space
- * @args_size: Size of the data structure
- */
-static int kbase_legacy_dispatch(struct kbase_context *kctx,
-		void * const args, u32 args_size)
-{
-	struct kbase_device *kbdev;
-	union uk_header *ukh = args;
-	u32 id;
-	int ret = 0;
-
-	KBASE_DEBUG_ASSERT(ukh != NULL);
-
-	kbdev = kctx->kbdev;
-	id = ukh->id;
-	ukh->ret = MALI_ERROR_NONE; /* Be optimistic */
-
-#ifdef CONFIG_MALI_DEBUG
-	wait_event(kbdev->driver_inactive_wait,
-			kbdev->driver_inactive == false);
-#endif /* CONFIG_MALI_DEBUG */
-
-	if (UKP_FUNC_ID_CHECK_VERSION == id) {
-		struct uku_version_check_args *version_check;
-		struct kbase_ioctl_version_check version;
-
-		if (args_size != sizeof(struct uku_version_check_args)) {
-			ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			return 0;
-		}
-		version_check = (struct uku_version_check_args *)args;
-		version.minor = version_check->minor;
-		version.major = version_check->major;
-
-		kbase_api_handshake(kctx, &version);
-
-		version_check->minor = version.minor;
-		version_check->major = version.major;
-		ukh->ret = MALI_ERROR_NONE;
-		return 0;
-	}
-
-	/* block calls until version handshake */
-	if (kctx->api_version == 0)
-		return -EINVAL;
-
-	if (!atomic_read(&kctx->setup_complete)) {
-		struct kbase_uk_set_flags *kbase_set_flags;
-
-		/* setup pending, try to signal that we'll do the setup,
-		 * if setup was already in progress, err this call
-		 */
-		if (atomic_cmpxchg(&kctx->setup_in_progress, 0, 1) != 0)
-			return -EINVAL;
-
-		/* if unexpected call, will stay stuck in setup mode
-		 * (is it the only call we accept?)
-		 */
-		if (id != KBASE_FUNC_SET_FLAGS)
-			return -EINVAL;
-
-		kbase_set_flags = (struct kbase_uk_set_flags *)args;
-
-		/* if not matching the expected call, stay in setup mode */
-		if (sizeof(*kbase_set_flags) != args_size)
-			goto bad_size;
-
-		/* if bad flags, will stay stuck in setup mode */
-		if (kbase_context_set_create_flags(kctx,
-				kbase_set_flags->create_flags) != 0)
-			ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-
-		atomic_set(&kctx->setup_complete, 1);
-		return 0;
-	}
-
-	/* setup complete, perform normal operation */
-	switch (id) {
-	case KBASE_FUNC_MEM_JIT_INIT:
-		{
-			struct kbase_uk_mem_jit_init *jit_init = args;
-			struct kbase_ioctl_mem_jit_init_old jit_init_old;
-
-			if (sizeof(*jit_init) != args_size)
-				goto bad_size;
-
-			jit_init_old.va_pages = jit_init->va_pages;
-			if (kbase_api_mem_jit_init_old(kctx, &jit_init_old))
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			break;
-		}
-	case KBASE_FUNC_MEM_ALLOC:
-		{
-			struct kbase_uk_mem_alloc *mem = args;
-			struct kbase_va_region *reg;
-
-			if (sizeof(*mem) != args_size)
-				goto bad_size;
-
-#if defined(CONFIG_64BIT)
-			if (!kbase_ctx_flag(kctx, KCTX_COMPAT)) {
-				/* force SAME_VA if a 64-bit client */
-				mem->flags |= BASE_MEM_SAME_VA;
-			}
-#endif
-
-			reg = kbase_mem_alloc(kctx, mem->va_pages,
-					mem->commit_pages, mem->extent,
-					&mem->flags, &mem->gpu_va);
-			mem->va_alignment = 0;
-
-			if (!reg)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			break;
-		}
-	case KBASE_FUNC_MEM_IMPORT: {
-			struct kbase_uk_mem_import *mem_import = args;
-			void __user *phandle;
-
-			if (sizeof(*mem_import) != args_size)
-				goto bad_size;
-#ifdef CONFIG_COMPAT
-			if (kbase_ctx_flag(kctx, KCTX_COMPAT))
-				phandle = compat_ptr(mem_import->phandle);
-			else
-#endif
-				phandle = u64_to_user_ptr(mem_import->phandle);
-
-			if (mem_import->type == BASE_MEM_IMPORT_TYPE_INVALID) {
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-				break;
-			}
-
-			if (kbase_mem_import(kctx,
-					(enum base_mem_import_type)
-					mem_import->type,
-					phandle,
-					0,
-					&mem_import->gpu_va,
-					&mem_import->va_pages,
-					&mem_import->flags)) {
-				mem_import->type = BASE_MEM_IMPORT_TYPE_INVALID;
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			}
-			break;
-	}
-	case KBASE_FUNC_MEM_ALIAS: {
-			struct kbase_uk_mem_alias *alias = args;
-			struct base_mem_aliasing_info __user *user_ai;
-			struct base_mem_aliasing_info *ai;
-
-			if (sizeof(*alias) != args_size)
-				goto bad_size;
-
-			if (alias->nents > 2048) {
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-				break;
-			}
-			if (!alias->nents) {
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-				break;
-			}
-
-#ifdef CONFIG_COMPAT
-			if (kbase_ctx_flag(kctx, KCTX_COMPAT))
-				user_ai = compat_ptr(alias->ai);
-			else
-#endif
-				user_ai = u64_to_user_ptr(alias->ai);
-
-			ai = vmalloc(sizeof(*ai) * alias->nents);
-
-			if (!ai) {
-				ukh->ret = MALI_ERROR_OUT_OF_MEMORY;
-				break;
-			}
-
-			if (copy_from_user(ai, user_ai,
-					   sizeof(*ai) * alias->nents)) {
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-				goto copy_failed;
-			}
-
-			alias->gpu_va = kbase_mem_alias(kctx, &alias->flags,
-							alias->stride,
-							alias->nents, ai,
-							&alias->va_pages);
-			if (!alias->gpu_va) {
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-				goto no_alias;
-			}
-no_alias:
-copy_failed:
-			vfree(ai);
-			break;
-		}
-	case KBASE_FUNC_MEM_COMMIT:
-		{
-			struct kbase_uk_mem_commit *commit = args;
-			int ret;
-
-			if (sizeof(*commit) != args_size)
-				goto bad_size;
-
-			ret = kbase_mem_commit(kctx, commit->gpu_addr,
-					commit->pages);
-
-			ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			commit->result_subcode =
-				BASE_BACKING_THRESHOLD_ERROR_INVALID_ARGUMENTS;
-
-			if (ret == 0) {
-				ukh->ret = MALI_ERROR_NONE;
-				commit->result_subcode =
-					BASE_BACKING_THRESHOLD_OK;
-			} else if (ret == -ENOMEM) {
-				commit->result_subcode =
-					BASE_BACKING_THRESHOLD_ERROR_OOM;
-			}
-
-			break;
-		}
-
-	case KBASE_FUNC_MEM_QUERY:
-		{
-			struct kbase_uk_mem_query *query = args;
-
-			if (sizeof(*query) != args_size)
-				goto bad_size;
-
-			if (kbase_mem_query(kctx, query->gpu_addr,
-					query->query, &query->value) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			else
-				ukh->ret = MALI_ERROR_NONE;
-			break;
-		}
-		break;
-
-	case KBASE_FUNC_MEM_FLAGS_CHANGE:
-		{
-			struct kbase_uk_mem_flags_change *fc = args;
-
-			if (sizeof(*fc) != args_size)
-				goto bad_size;
-
-			if (kbase_mem_flags_change(kctx, fc->gpu_va,
-					fc->flags, fc->mask) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-
-			break;
-		}
-	case KBASE_FUNC_MEM_FREE:
-		{
-			struct kbase_uk_mem_free *mem = args;
-
-			if (sizeof(*mem) != args_size)
-				goto bad_size;
-
-			if (kbase_mem_free(kctx, mem->gpu_addr) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			break;
-		}
-
-	case KBASE_FUNC_JOB_SUBMIT:
-		{
-			struct kbase_uk_job_submit *job = args;
-			char __user *user_buf;
-
-			if (sizeof(*job) != args_size)
-				goto bad_size;
-
-#ifdef CONFIG_COMPAT
-			if (kbase_ctx_flag(kctx, KCTX_COMPAT))
-				user_buf = compat_ptr(job->addr);
-			else
-#endif
-				user_buf = u64_to_user_ptr(job->addr);
-
-			if (kbase_jd_submit(kctx, user_buf,
-						job->nr_atoms,
-						job->stride,
-						false) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			break;
-		}
-
-	case KBASE_FUNC_SYNC:
-		{
-			struct kbase_uk_sync_now *sn = args;
-
-			if (sizeof(*sn) != args_size)
-				goto bad_size;
-
-			if (kbase_sync_now(kctx, &sn->sset.basep_sset) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			break;
-		}
-
-	case KBASE_FUNC_DISJOINT_QUERY:
-		{
-			struct kbase_uk_disjoint_query *dquery = args;
-
-			if (sizeof(*dquery) != args_size)
-				goto bad_size;
-
-			/* Get the disjointness counter value. */
-			dquery->counter = kbase_disjoint_event_get(kctx->kbdev);
-			break;
-		}
-
-	case KBASE_FUNC_POST_TERM:
-		{
-			kbase_event_close(kctx);
-			break;
-		}
-
-	case KBASE_FUNC_HWCNT_SETUP:
-		{
-			break;
-		}
-
-	case KBASE_FUNC_HWCNT_DUMP:
-		{
-			break;
-		}
-
-	case KBASE_FUNC_HWCNT_CLEAR:
-		{
-			break;
-		}
-
-	case KBASE_FUNC_HWCNT_READER_SETUP:
-		{
-			break;
-		}
-
-	case KBASE_FUNC_GPU_PROPS_REG_DUMP:
-		{
-			struct kbase_uk_gpuprops *setup = args;
-
-			if (sizeof(*setup) != args_size)
-				goto bad_size;
-
-			if (kbase_gpuprops_uk_get_props(kctx, setup) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			break;
-		}
-	case KBASE_FUNC_FIND_CPU_OFFSET:
-		{
-			struct kbase_uk_find_cpu_offset *find = args;
-
-			if (sizeof(*find) != args_size)
-				goto bad_size;
-
-			if (find->gpu_addr & ~PAGE_MASK) {
-				dev_warn(kbdev->dev, "kbase_legacy_dispatch case KBASE_FUNC_FIND_CPU_OFFSET: find->gpu_addr: passed parameter is invalid");
-				goto out_bad;
-			}
-
-			if (find->size > SIZE_MAX || find->cpu_addr > ULONG_MAX) {
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			} else {
-				int err;
-
-				err = kbasep_find_enclosing_cpu_mapping_offset(
-						kctx,
-						find->cpu_addr,
-						find->size,
-						&find->offset);
-
-				if (err)
-					ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			}
-			break;
-		}
-	case KBASE_FUNC_GET_VERSION:
-		{
-			struct kbase_uk_get_ddk_version *get_version = (struct kbase_uk_get_ddk_version *)args;
-
-			if (sizeof(*get_version) != args_size)
-				goto bad_size;
-
-			/* version buffer size check is made in compile time assert */
-			memcpy(get_version->version_buffer, KERNEL_SIDE_DDK_VERSION_STRING, sizeof(KERNEL_SIDE_DDK_VERSION_STRING));
-			get_version->version_string_size = sizeof(KERNEL_SIDE_DDK_VERSION_STRING);
-			break;
-		}
-
-	case KBASE_FUNC_STREAM_CREATE:
-		{
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
-			struct kbase_uk_stream_create *screate = (struct kbase_uk_stream_create *)args;
-
-			if (sizeof(*screate) != args_size)
-				goto bad_size;
-
-			if (strnlen(screate->name, sizeof(screate->name)) >= sizeof(screate->name)) {
-				/* not NULL terminated */
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-				break;
-			}
-
-			if (kbase_sync_fence_stream_create(screate->name,
-							   &screate->fd) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			else
-				ukh->ret = MALI_ERROR_NONE;
-#else /* CONFIG_SYNC || CONFIG_SYNC_FILE */
-			ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-#endif /* CONFIG_SYNC || CONFIG_SYNC_FILE */
-			break;
-		}
-	case KBASE_FUNC_FENCE_VALIDATE:
-		{
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
-			struct kbase_uk_fence_validate *fence_validate = (struct kbase_uk_fence_validate *)args;
-
-			if (sizeof(*fence_validate) != args_size)
-				goto bad_size;
-
-			if (kbase_sync_fence_validate(fence_validate->fd) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			else
-				ukh->ret = MALI_ERROR_NONE;
-#endif /* CONFIG_SYNC || CONFIG_SYNC_FILE */
-			break;
-		}
-
-	case KBASE_FUNC_SET_TEST_DATA:
-		{
-#if MALI_UNIT_TEST
-			struct kbase_uk_set_test_data *set_data = args;
-
-			shared_kernel_test_data = set_data->test_data;
-			shared_kernel_test_data.kctx = (uintptr_t)kctx;
-			shared_kernel_test_data.mm = (uintptr_t)current->mm;
-			ukh->ret = MALI_ERROR_NONE;
-#endif /* MALI_UNIT_TEST */
-			break;
-		}
-
-	case KBASE_FUNC_INJECT_ERROR:
-		{
-#ifdef CONFIG_MALI_ERROR_INJECT
-			unsigned long flags;
-			struct kbase_error_params params = ((struct kbase_uk_error_params *)args)->params;
-
-			/*mutex lock */
-			spin_lock_irqsave(&kbdev->reg_op_lock, flags);
-			if (job_atom_inject_error(&params) != 0)
-				ukh->ret = MALI_ERROR_OUT_OF_MEMORY;
-			else
-				ukh->ret = MALI_ERROR_NONE;
-			spin_unlock_irqrestore(&kbdev->reg_op_lock, flags);
-			/*mutex unlock */
-#endif /* CONFIG_MALI_ERROR_INJECT */
-			break;
-		}
-
-	case KBASE_FUNC_MODEL_CONTROL:
-		{
-#ifdef CONFIG_MALI_NO_MALI
-			unsigned long flags;
-			struct kbase_model_control_params params =
-					((struct kbase_uk_model_control_params *)args)->params;
-
-			/*mutex lock */
-			spin_lock_irqsave(&kbdev->reg_op_lock, flags);
-			if (gpu_model_control(kbdev->model, &params) != 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			else
-				ukh->ret = MALI_ERROR_NONE;
-			spin_unlock_irqrestore(&kbdev->reg_op_lock, flags);
-			/*mutex unlock */
-#endif /* CONFIG_MALI_NO_MALI */
-			break;
-		}
-
-	case KBASE_FUNC_GET_PROFILING_CONTROLS:
-		{
-			break;
-		}
-
-	/* used only for testing purposes; these controls are to be set by gator through gator API */
-	case KBASE_FUNC_SET_PROFILING_CONTROLS:
-		{
-			break;
-		}
-
-	case KBASE_FUNC_DEBUGFS_MEM_PROFILE_ADD:
-		{
-			struct kbase_uk_debugfs_mem_profile_add *add_data =
-					(struct kbase_uk_debugfs_mem_profile_add *)args;
-			char *buf;
-			char __user *user_buf;
-
-			if (sizeof(*add_data) != args_size)
-				goto bad_size;
-
-			if (add_data->len > KBASE_MEM_PROFILE_MAX_BUF_SIZE) {
-				dev_err(kbdev->dev, "buffer too big\n");
-				goto out_bad;
-			}
-
-#ifdef CONFIG_COMPAT
-			if (kbase_ctx_flag(kctx, KCTX_COMPAT))
-				user_buf = compat_ptr(add_data->buf);
-			else
-#endif
-				user_buf = u64_to_user_ptr(add_data->buf);
-
-			buf = kmalloc(add_data->len, GFP_KERNEL);
-			if (ZERO_OR_NULL_PTR(buf))
-				goto out_bad;
-
-			if (0 != copy_from_user(buf, user_buf, add_data->len)) {
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-				kfree(buf);
-				goto out_bad;
-			}
-
-			if (kbasep_mem_profile_debugfs_insert(kctx, buf,
-							add_data->len)) {
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-				goto out_bad;
-			}
-
-			break;
-		}
-
-#ifdef CONFIG_MALI_NO_MALI
-	case KBASE_FUNC_SET_PRFCNT_VALUES:
-		{
-
-			struct kbase_uk_prfcnt_values *params =
-			  ((struct kbase_uk_prfcnt_values *)args);
-			gpu_model_set_dummy_prfcnt_sample(params->data,
-					params->size);
-
-			break;
-		}
-#endif /* CONFIG_MALI_NO_MALI */
-#ifdef BASE_LEGACY_UK10_4_SUPPORT
-	case KBASE_FUNC_TLSTREAM_ACQUIRE_V10_4:
-		{
-			struct kbase_uk_tlstream_acquire_v10_4 *tlstream_acquire
-					= args;
-			int ret;
-
-			if (sizeof(*tlstream_acquire) != args_size)
-				goto bad_size;
-
-			ret = kbase_tlstream_acquire(
-						kctx, 0);
-			if (ret < 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			else
-				tlstream_acquire->fd = ret;
-			break;
-		}
-#endif /* BASE_LEGACY_UK10_4_SUPPORT */
-	case KBASE_FUNC_TLSTREAM_ACQUIRE:
-		{
-			struct kbase_uk_tlstream_acquire *tlstream_acquire =
-				args;
-			int ret;
-
-			if (sizeof(*tlstream_acquire) != args_size)
-				goto bad_size;
-
-			if (tlstream_acquire->flags & ~BASE_TLSTREAM_FLAGS_MASK)
-				goto out_bad;
-
-			ret = kbase_tlstream_acquire(
-					kctx, tlstream_acquire->flags);
-			if (ret < 0)
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-			else
-				tlstream_acquire->fd = ret;
-			break;
-		}
-	case KBASE_FUNC_TLSTREAM_FLUSH:
-		{
-			struct kbase_uk_tlstream_flush *tlstream_flush =
-				args;
-
-			if (sizeof(*tlstream_flush) != args_size)
-				goto bad_size;
-
-			kbase_tlstream_flush_streams();
-			break;
-		}
-#if MALI_UNIT_TEST
-	case KBASE_FUNC_TLSTREAM_TEST:
-		{
-			struct kbase_uk_tlstream_test *tlstream_test = args;
-
-			if (sizeof(*tlstream_test) != args_size)
-				goto bad_size;
-
-			kbase_tlstream_test(
-					tlstream_test->tpw_count,
-					tlstream_test->msg_delay,
-					tlstream_test->msg_count,
-					tlstream_test->aux_msg);
-			break;
-		}
-	case KBASE_FUNC_TLSTREAM_STATS:
-		{
-			struct kbase_uk_tlstream_stats *tlstream_stats = args;
-
-			if (sizeof(*tlstream_stats) != args_size)
-				goto bad_size;
-
-			kbase_tlstream_stats(
-					&tlstream_stats->bytes_collected,
-					&tlstream_stats->bytes_generated);
-			break;
-		}
-#endif /* MALI_UNIT_TEST */
-
-	case KBASE_FUNC_GET_CONTEXT_ID:
-		{
-			struct kbase_uk_context_id *info = args;
-
-			info->id = kctx->id;
-			break;
-		}
-
-	case KBASE_FUNC_SOFT_EVENT_UPDATE:
-		{
-			struct kbase_uk_soft_event_update *update = args;
-
-			if (sizeof(*update) != args_size)
-				goto bad_size;
-
-			if (((update->new_status != BASE_JD_SOFT_EVENT_SET) &&
-			    (update->new_status != BASE_JD_SOFT_EVENT_RESET)) ||
-			    (update->flags != 0))
-				goto out_bad;
-
-			if (kbase_soft_event_update(kctx, update->evt,
-						update->new_status))
-				ukh->ret = MALI_ERROR_FUNCTION_FAILED;
-
-			break;
-		}
-
-	default:
-		dev_err(kbdev->dev, "unknown ioctl %u\n", id);
-		goto out_bad;
-	}
-
-	return ret;
-
- bad_size:
-	dev_err(kbdev->dev, "Wrong syscall size (%d) for %08x\n", args_size, id);
- out_bad:
-	return -EINVAL;
-}
-
 static struct kbase_device *to_kbase_device(struct device *dev)
 {
 	return dev_get_drvdata(dev);
@@ -898,11 +212,11 @@ static int assign_irqs(struct platform_device *pdev)
 		}
 
 #ifdef CONFIG_OF
-		if (!strncmp(irq_res->name, "job", 4)) {
+		if (!strncmp(irq_res->name, "JOB", 4)) {
 			irqtag = JOB_IRQ_TAG;
-		} else if (!strncmp(irq_res->name, "mmu", 4)) {
+		} else if (!strncmp(irq_res->name, "MMU", 4)) {
 			irqtag = MMU_IRQ_TAG;
-		} else if (!strncmp(irq_res->name, "gpu", 4)) {
+		} else if (!strncmp(irq_res->name, "GPU", 4)) {
 			irqtag = GPU_IRQ_TAG;
 		} else {
 			dev_err(&pdev->dev, "Invalid irq res name: '%s'\n",
@@ -987,6 +301,7 @@ static int kstrtobool_from_user(const char __user *s, size_t count, bool *res)
 }
 #endif
 
+#ifdef CONFIG_DEBUG_FS
 static ssize_t write_ctx_infinite_cache(struct file *f, const char __user *ubuf, size_t size, loff_t *off)
 {
 	struct kbase_context *kctx = f->private_data;
@@ -1020,6 +335,7 @@ static ssize_t read_ctx_infinite_cache(struct file *f, char __user *ubuf, size_t
 }
 
 static const struct file_operations kbase_infinite_cache_fops = {
+	.owner = THIS_MODULE,
 	.open = simple_open,
 	.write = write_ctx_infinite_cache,
 	.read = read_ctx_infinite_cache,
@@ -1069,10 +385,12 @@ static ssize_t read_ctx_force_same_va(struct file *f, char __user *ubuf,
 }
 
 static const struct file_operations kbase_force_same_va_fops = {
+	.owner = THIS_MODULE,
 	.open = simple_open,
 	.write = write_ctx_force_same_va,
 	.read = read_ctx_force_same_va,
 };
+#endif
 
 static int kbase_open(struct inode *inode, struct file *filp)
 {
@@ -1117,10 +435,19 @@ static int kbase_open(struct inode *inode, struct file *filp)
 		goto out;
 	}
 
+#if (KERNEL_VERSION(4, 7, 0) > LINUX_VERSION_CODE)
+	/* prevent unprivileged use of debug file system
+	 * in old kernel version
+	 */
+	debugfs_create_file("infinite_cache", 0600, kctx->kctx_dentry,
+		kctx, &kbase_infinite_cache_fops);
+#else
 	debugfs_create_file("infinite_cache", 0644, kctx->kctx_dentry,
-			kctx, &kbase_infinite_cache_fops);
+		kctx, &kbase_infinite_cache_fops);
+#endif
+
 	debugfs_create_file("force_same_va", S_IRUSR | S_IWUSR,
-			kctx->kctx_dentry, kctx, &kbase_force_same_va_fops);
+		kctx->kctx_dentry, kctx, &kbase_force_same_va_fops);
 
 	mutex_init(&kctx->mem_profile_lock);
 
@@ -1129,7 +456,8 @@ static int kbase_open(struct inode *inode, struct file *filp)
 
 	kbase_debug_job_fault_context_init(kctx);
 
-	kbase_mem_pool_debugfs_init(kctx->kctx_dentry, &kctx->mem_pool, &kctx->lp_mem_pool);
+	kbase_mem_pool_debugfs_init(kctx->kctx_dentry, &kctx->mem_pool,
+		&kctx->lp_mem_pool);
 
 	kbase_jit_debugfs_init(kctx);
 #endif /* CONFIG_DEBUG_FS */
@@ -1200,33 +528,6 @@ static int kbase_release(struct inode *inode, struct file *filp)
 
 	dev_dbg(kbdev->dev, "deleted base context\n");
 	kbase_release_device(kbdev);
-	return 0;
-}
-
-#define CALL_MAX_SIZE 536
-
-static long kbase_legacy_ioctl(struct file *filp, unsigned int cmd,
-		unsigned long arg)
-{
-	u64 msg[(CALL_MAX_SIZE + 7) >> 3] = { 0xdeadbeefdeadbeefull };	/* alignment fixup */
-	u32 size = _IOC_SIZE(cmd);
-	struct kbase_context *kctx = filp->private_data;
-
-	if (size > CALL_MAX_SIZE)
-		return -ENOTTY;
-
-	if (0 != copy_from_user(&msg, (void __user *)arg, size)) {
-		dev_err(kctx->kbdev->dev, "failed to copy ioctl argument into kernel space\n");
-		return -EFAULT;
-	}
-
-	if (kbase_legacy_dispatch(kctx, &msg, size) != 0)
-		return -EFAULT;
-
-	if (0 != copy_to_user((void __user *)arg, &msg, size)) {
-		dev_err(kctx->kbdev->dev, "failed to copy results of UK call back to user space\n");
-		return -EFAULT;
-	}
 	return 0;
 }
 
@@ -1450,6 +751,20 @@ static int kbase_api_get_ddk_version(struct kbase_context *kctx,
 		return -EFAULT;
 
 	return len;
+}
+
+/* Defaults for legacy JIT init ioctl */
+#define DEFAULT_MAX_JIT_ALLOCATIONS 255
+#define JIT_LEGACY_TRIM_LEVEL (0) /* No trimming */
+
+static int kbase_api_mem_jit_init_old(struct kbase_context *kctx,
+		struct kbase_ioctl_mem_jit_init_old *jit_init)
+{
+	kctx->jit_version = 1;
+
+	return kbase_region_tracker_init_jit(kctx, jit_init->va_pages,
+			DEFAULT_MAX_JIT_ALLOCATIONS,
+			JIT_LEGACY_TRIM_LEVEL);
 }
 
 static int kbase_api_mem_jit_init(struct kbase_context *kctx,
@@ -1827,20 +1142,6 @@ static long kbase_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	struct kbase_device *kbdev = kctx->kbdev;
 	void __user *uarg = (void __user *)arg;
 
-	/* The UK ioctl values overflow the cmd field causing the type to be
-	 * incremented
-	 */
-	if (_IOC_TYPE(cmd) == LINUX_UK_BASE_MAGIC+2)
-		return kbase_legacy_ioctl(filp, cmd, arg);
-
-	/* The UK version check IOCTL doesn't overflow the cmd field, so is
-	 * handled separately here
-	 */
-	if (cmd == _IOC(_IOC_READ|_IOC_WRITE, LINUX_UK_BASE_MAGIC,
-				UKP_FUNC_ID_CHECK_VERSION,
-				sizeof(struct uku_version_check_args)))
-		return kbase_legacy_ioctl(filp, cmd, arg);
-
 	/* Only these ioctls are available until setup is complete */
 	switch (cmd) {
 	case KBASE_IOCTL_VERSION_CHECK:
@@ -2048,7 +1349,7 @@ static long kbase_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 				kbase_api_tlstream_stats,
 				struct kbase_ioctl_tlstream_stats);
 		break;
-#endif
+#endif /* MALI_UNIT_TEST */
 	}
 
 	dev_warn(kbdev->dev, "Unknown ioctl 0x%x nr:%d", cmd, _IOC_NR(cmd));
@@ -2199,7 +1500,7 @@ static ssize_t show_policy(struct device *dev, struct device_attribute *attr, ch
  * @dev:	The device with sysfs file is for
  * @attr:	The attributes of the sysfs file
  * @buf:	The value written to the sysfs file
- * @count:	The number of bytes written to the sysfs file
+ * @count:	The number of bytes to write to the sysfs file
  *
  * Return: @count if the function succeeded. An error code on failure.
  */
@@ -2289,7 +1590,7 @@ static ssize_t show_core_mask(struct device *dev, struct device_attribute *attr,
  * @dev:	The device with sysfs file is for
  * @attr:	The attributes of the sysfs file
  * @buf:	The value written to the sysfs file
- * @count:	The number of bytes written to the sysfs file
+ * @count:	The number of bytes to write to the sysfs file
  *
  * Return: @count if the function succeeded. An error code on failure.
  */
@@ -2382,7 +1683,7 @@ static DEVICE_ATTR(core_mask, S_IRUGO | S_IWUSR, show_core_mask, set_core_mask);
  * @dev: The device this sysfs file is for.
  * @attr: The attributes of the sysfs file.
  * @buf: The value written to the sysfs file.
- * @count: The number of bytes written to the sysfs file.
+ * @count: The number of bytes to write to the sysfs file.
  *
  * This allows setting the timeout for software jobs. Waiting soft event wait
  * jobs will be cancelled after this period expires, while soft fence wait jobs
@@ -2475,7 +1776,7 @@ static u32 timeout_ms_to_ticks(struct kbase_device *kbdev, long timeout_ms,
  * @dev:	The device with sysfs file is for
  * @attr:	The attributes of the sysfs file
  * @buf:	The value written to the sysfs file
- * @count:	The number of bytes written to the sysfs file
+ * @count:	The number of bytes to write to the sysfs file
  *
  * Return: @count if the function succeeded. An error code on failure.
  */
@@ -2656,7 +1957,7 @@ static u32 get_new_js_timeout(
  * @dev:   The device the sysfs file is for
  * @attr:  The attributes of the sysfs file
  * @buf:   The value written to the sysfs file
- * @count: The number of bytes written to the sysfs file
+ * @count: The number of bytes to write to the sysfs file
  *
  * This function is called when the js_scheduling_period sysfs file is written
  * to. It checks the data written, and if valid updates the js_scheduling_period
@@ -2772,7 +2073,7 @@ static DEVICE_ATTR(js_scheduling_period, S_IRUGO | S_IWUSR,
  * @dev:	The device with sysfs file is for
  * @attr:	The attributes of the sysfs file
  * @buf:	The value written to the sysfs file
- * @count:	The number of bytes written to the sysfs file
+ * @count:	The number of bytes to write to the sysfs file
  *
  * Return: @count if the function succeeded. An error code on failure.
  */
@@ -2994,7 +2295,7 @@ static ssize_t show_debug(struct device *dev, struct device_attribute *attr, cha
  * @dev:	The device with sysfs file is for
  * @attr:	The attributes of the sysfs file
  * @buf:	The value written to the sysfs file
- * @count:	The number of bytes written to the sysfs file
+ * @count:	The number of bytes to write to the sysfs file
  *
  * Return: @count if the function succeeded. An error code on failure.
  */
@@ -3350,45 +2651,6 @@ static ssize_t show_mem_pool_size(struct device *dev,
 	return ret;
 }
 
-static ssize_t set_mem_pool_size(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct kbase_device *kbdev;
-	size_t new_size;
-	int err;
-
-	kbdev = to_kbase_device(dev);
-	if (!kbdev)
-		return -ENODEV;
-
-	err = kstrtoul(buf, 0, (unsigned long *)&new_size);
-	if (err)
-		return err;
-
-	kbase_mem_pool_trim(&kbdev->mem_pool, new_size);
-
-	return count;
-}
-
-static DEVICE_ATTR(mem_pool_size, S_IRUGO | S_IWUSR, show_mem_pool_size,
-		set_mem_pool_size);
-
-static ssize_t show_mem_pool_max_size(struct device *dev,
-		struct device_attribute *attr, char * const buf)
-{
-	struct kbase_device *kbdev;
-	ssize_t ret;
-
-	kbdev = to_kbase_device(dev);
-	if (!kbdev)
-		return -ENODEV;
-
-	ret = scnprintf(buf, PAGE_SIZE, "%zu\n",
-			kbase_mem_pool_max_size(&kbdev->mem_pool));
-
-	return ret;
-}
-
 static ssize_t set_mem_pool_max_size(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
@@ -3409,8 +2671,7 @@ static ssize_t set_mem_pool_max_size(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(mem_pool_max_size, S_IRUGO | S_IWUSR, show_mem_pool_max_size,
-		set_mem_pool_max_size);
+static DEVICE_ATTR(max_size, S_IRUGO | S_IWUSR, show_mem_pool_size, set_mem_pool_max_size);
 
 /**
  * show_lp_mem_pool_size - Show size of the large memory pages pool.
@@ -3435,67 +2696,10 @@ static ssize_t show_lp_mem_pool_size(struct device *dev,
 }
 
 /**
- * set_lp_mem_pool_size - Set size of the large memory pages pool.
- * @dev:   The device this sysfs file is for.
- * @attr:  The attributes of the sysfs file.
- * @buf:   The value written to the sysfs file.
- * @count: The number of bytes written to the sysfs file.
- *
- * This function is called to set the number of large memory pages which should populate the kbdev pool.
- * This may cause existing pages to be removed from the pool, or new pages to be created and then added to the pool.
- *
- * Return: @count if the function succeeded. An error code on failure.
- */
-static ssize_t set_lp_mem_pool_size(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct kbase_device *kbdev;
-	unsigned long new_size;
-	int err;
-
-	kbdev = to_kbase_device(dev);
-	if (!kbdev)
-		return -ENODEV;
-
-	err = kstrtoul(buf, 0, &new_size);
-	if (err)
-		return err;
-
-	kbase_mem_pool_trim(&kbdev->lp_mem_pool, new_size);
-
-	return count;
-}
-
-static DEVICE_ATTR(lp_mem_pool_size, S_IRUGO | S_IWUSR, show_lp_mem_pool_size,
-		set_lp_mem_pool_size);
-
-/**
- * show_lp_mem_pool_max_size - Show maximum size of the large memory pages pool.
+ * set_lp_mem_pool_max_size - Set max size of the large memory pages pool.
  * @dev:  The device this sysfs file is for.
  * @attr: The attributes of the sysfs file.
- * @buf:  The output buffer to receive the pool size.
- *
- * This function is called to get the maximum number of large memory pages that the kbdev pool can possibly contain.
- *
- * Return: The number of bytes output to @buf.
- */
-static ssize_t show_lp_mem_pool_max_size(struct device *dev,
-		struct device_attribute *attr, char * const buf)
-{
-	struct kbase_device *kbdev;
-
-	kbdev = to_kbase_device(dev);
-	if (!kbdev)
-		return -ENODEV;
-
-	return scnprintf(buf, PAGE_SIZE, "%zu\n", kbase_mem_pool_max_size(&kbdev->lp_mem_pool));
-}
-
-/**
- * set_lp_mem_pool_max_size - Set maximum size of the large memory pages pool.
- * @dev:   The device this sysfs file is for.
- * @attr:  The attributes of the sysfs file.
- * @buf:   The value written to the sysfs file.
+ * @buf:  The value written to the sysfs file.
  * @count: The number of bytes written to the sysfs file.
  *
  * This function is called to set the maximum number of large memory pages that the kbdev pool can possibly contain.
@@ -3522,8 +2726,66 @@ static ssize_t set_lp_mem_pool_max_size(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(lp_mem_pool_max_size, S_IRUGO | S_IWUSR, show_lp_mem_pool_max_size,
-		set_lp_mem_pool_max_size);
+static DEVICE_ATTR(lp_max_size, S_IRUGO | S_IWUSR, show_lp_mem_pool_size, set_lp_mem_pool_max_size);
+
+/**
+ * show_ctx_max_size - Show the max size for all pools for new contexts (in pages).
+ * @dev:  The device this sysfs file is for.
+ * @attr: The attributes of the sysfs file.
+ * @buf:  The output buffer to receive the pool size.
+ *
+ * This function is called to get the max size for all pools for new contexts.
+ *
+ * Return: The number of bytes output to @buf.
+ */
+static ssize_t show_ctx_max_size(struct device *dev,
+		struct device_attribute *attr, char * const buf)
+{
+	struct kbase_device *kbdev;
+	ssize_t ret;
+
+	kbdev = to_kbase_device(dev);
+	if (!kbdev)
+		return -ENODEV;
+
+	ret = scnprintf(buf, PAGE_SIZE, "%zu\n", kbase_mem_pool_ctx_max_size(kbdev));
+
+	return ret;
+}
+
+/**
+ * set_ctx_max_size - Set max size for all pools for new contexts (in pages).
+ * @dev:  The device this sysfs file is for.
+ * @attr: The attributes of the sysfs file.
+ * @buf:  The value written to the sysfs file.
+ * @count: The number of bytes written to the sysfs file.
+ *
+ * This function is called to set max size for all pools for new contexts.
+ *
+ * Return: @count if the function succeeded. An error code on failure.
+ */
+static ssize_t set_ctx_max_size(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct kbase_device *kbdev;
+	size_t new_max_size;
+	int err;
+
+	kbdev = to_kbase_device(dev);
+	if (!kbdev)
+		return -ENODEV;
+
+	err = kstrtoul(buf, 0, (unsigned long *)&new_max_size);
+	if (err)
+		return err;
+
+	kbase_mem_pool_set_ctx_max_size(kbdev, new_max_size);
+
+	return count;
+}
+
+static DEVICE_ATTR(ctx_max_size, S_IRUGO | S_IWUSR, show_ctx_max_size,
+		set_ctx_max_size);
 
 /**
  * show_js_ctx_scheduling_mode - Show callback for js_ctx_scheduling_mode sysfs
@@ -3607,7 +2869,6 @@ static ssize_t set_js_ctx_scheduling_mode(struct device *dev,
 static DEVICE_ATTR(js_ctx_scheduling_mode, S_IRUGO | S_IWUSR,
 		show_js_ctx_scheduling_mode,
 		set_js_ctx_scheduling_mode);
-#ifdef CONFIG_DEBUG_FS
 
 /* Number of entries in serialize_jobs_settings[] */
 #define NR_SERIALIZE_JOBS_SETTINGS 5
@@ -3628,8 +2889,47 @@ static struct
 };
 
 /**
- * kbasep_serialize_jobs_seq_show - Show callback for the serialize_jobs debugfs
- *                                  file
+ * update_serialize_jobs_setting - Update the serialization setting for the
+ *                                 submission of GPU jobs.
+ *
+ * This function is called when the serialize_jobs sysfs/debugfs file is
+ * written to. It matches the requested setting against the available settings
+ * and if a matching setting is found updates kbdev->serialize_jobs.
+ *
+ * @kbdev:  An instance of the GPU platform device, allocated from the probe
+ *          method of the driver.
+ * @buf:    Buffer containing the value written to the sysfs/debugfs file.
+ * @count:  The number of bytes to write to the sysfs/debugfs file.
+ *
+ * Return: @count if the function succeeded. An error code on failure.
+ */
+static ssize_t update_serialize_jobs_setting(struct kbase_device *kbdev,
+					     const char *buf, size_t count)
+{
+	int i;
+	bool valid = false;
+
+	for (i = 0; i < NR_SERIALIZE_JOBS_SETTINGS; i++) {
+		if (sysfs_streq(serialize_jobs_settings[i].name, buf)) {
+			kbdev->serialize_jobs =
+				serialize_jobs_settings[i].setting;
+			valid = true;
+			break;
+		}
+	}
+
+	if (!valid) {
+		dev_err(kbdev->dev, "serialize_jobs: invalid setting");
+		return -EINVAL;
+	}
+
+	return count;
+}
+
+#ifdef CONFIG_DEBUG_FS
+/**
+ * kbasep_serialize_jobs_seq_debugfs_show - Show callback for the serialize_jobs
+ *					    debugfs file
  * @sfile: seq_file pointer
  * @data:  Private callback data
  *
@@ -3639,7 +2939,8 @@ static struct
  *
  * Return: 0 on success, or an error code on error
  */
-static int kbasep_serialize_jobs_seq_show(struct seq_file *sfile, void *data)
+static int kbasep_serialize_jobs_seq_debugfs_show(struct seq_file *sfile,
+						  void *data)
 {
 	struct kbase_device *kbdev = sfile->private;
 	int i;
@@ -3680,8 +2981,6 @@ static ssize_t kbasep_serialize_jobs_debugfs_write(struct file *file,
 	struct seq_file *s = file->private_data;
 	struct kbase_device *kbdev = s->private;
 	char buf[MAX_SERIALIZE_JOBS_NAME_LEN];
-	int i;
-	bool valid = false;
 
 	CSTD_UNUSED(ppos);
 
@@ -3691,21 +2990,7 @@ static ssize_t kbasep_serialize_jobs_debugfs_write(struct file *file,
 
 	buf[count] = 0;
 
-	for (i = 0; i < NR_SERIALIZE_JOBS_SETTINGS; i++) {
-		if (sysfs_streq(serialize_jobs_settings[i].name, buf)) {
-			kbdev->serialize_jobs =
-					serialize_jobs_settings[i].setting;
-			valid = true;
-			break;
-		}
-	}
-
-	if (!valid) {
-		dev_err(kbdev->dev, "serialize_jobs: invalid setting\n");
-		return -EINVAL;
-	}
-
-	return count;
+	return update_serialize_jobs_setting(kbdev, buf, count);
 }
 
 /**
@@ -3719,10 +3004,12 @@ static ssize_t kbasep_serialize_jobs_debugfs_write(struct file *file,
 static int kbasep_serialize_jobs_debugfs_open(struct inode *in,
 		struct file *file)
 {
-	return single_open(file, kbasep_serialize_jobs_seq_show, in->i_private);
+	return single_open(file, kbasep_serialize_jobs_seq_debugfs_show,
+			   in->i_private);
 }
 
 static const struct file_operations kbasep_serialize_jobs_debugfs_fops = {
+	.owner = THIS_MODULE,
 	.open = kbasep_serialize_jobs_debugfs_open,
 	.read = seq_read,
 	.write = kbasep_serialize_jobs_debugfs_write,
@@ -3731,6 +3018,72 @@ static const struct file_operations kbasep_serialize_jobs_debugfs_fops = {
 };
 
 #endif /* CONFIG_DEBUG_FS */
+
+/**
+ * show_serialize_jobs_sysfs - Show callback for serialize_jobs sysfs file.
+ *
+ * This function is called to get the contents of the serialize_jobs sysfs
+ * file. This is a list of the available settings with the currently active
+ * one surrounded by square brackets.
+ *
+ * @dev:	The device this sysfs file is for
+ * @attr:	The attributes of the sysfs file
+ * @buf:	The output buffer for the sysfs file contents
+ *
+ * Return: The number of bytes output to @buf.
+ */
+static ssize_t show_serialize_jobs_sysfs(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	struct kbase_device *kbdev = to_kbase_device(dev);
+	ssize_t ret = 0;
+	int i;
+
+	for (i = 0; i < NR_SERIALIZE_JOBS_SETTINGS; i++) {
+		if (kbdev->serialize_jobs ==
+				serialize_jobs_settings[i].setting)
+			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "[%s]",
+					 serialize_jobs_settings[i].name);
+		else
+			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "%s ",
+					 serialize_jobs_settings[i].name);
+	}
+
+	if (ret < PAGE_SIZE - 1) {
+		ret += scnprintf(buf + ret, PAGE_SIZE - ret, "\n");
+	} else {
+		buf[PAGE_SIZE - 2] = '\n';
+		buf[PAGE_SIZE - 1] = '\0';
+		ret = PAGE_SIZE - 1;
+	}
+
+	return ret;
+}
+
+/**
+ * store_serialize_jobs_sysfs - Store callback for serialize_jobs sysfs file.
+ *
+ * This function is called when the serialize_jobs sysfs file is written to.
+ * It matches the requested policy against the available policies and if a
+ * matching policy is found, sets this to change this parameter.
+ *
+ * @dev:	The device this sysfs file is for
+ * @attr:	The attributes of the sysfs file
+ * @buf:	The value written to the sysfs file
+ * @count:	The number of bytes to write to the sysfs file
+ *
+ * Return: @count if the function succeeded. An error code on failure.
+ */
+static ssize_t store_serialize_jobs_sysfs(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
+{
+	return update_serialize_jobs_setting(to_kbase_device(dev), buf, count);
+}
+
+static DEVICE_ATTR(serialize_jobs, 0600, show_serialize_jobs_sysfs,
+		   store_serialize_jobs_sysfs);
 
 static void kbasep_protected_mode_hwcnt_disable_worker(struct work_struct *data)
 {
@@ -3948,50 +3301,7 @@ static int power_control_init(struct platform_device *pdev)
 			"Continuing without Mali regulator control\n");
 		/* Allow probe to continue without regulator */
 	}
-	else {
-		err = regulator_enable(kbdev->regulator);
-		if (err) {
-			dev_err(kbdev->dev, "Failed to enable regulator\n");
-			return err;
-		}
-	}
 #endif /* LINUX_VERSION_CODE >= 3, 12, 0 */
-
-#ifdef CONFIG_MALI_PLATFORM_DEVICETREE
-	kbdev->mali_rst = of_reset_control_get_by_index(kbdev->dev->of_node, 0);
-	if (IS_ERR_OR_NULL(kbdev->mali_rst)) {
-		err = PTR_ERR(kbdev->mali_rst);
-		kbdev->mali_rst = NULL;
-		if (err == -EPROBE_DEFER) {
-			dev_err(kbdev->dev, "Couldn't get mali reset line\n");
-			goto fail;
-		}
-		dev_info(kbdev->dev,
-			"Continuing without Mali reset line control\n");
-	} else {
-		reset_control_deassert(kbdev->mali_rst);
-	}
-#endif
-
-	kbdev->bus_clk = of_clk_get(kbdev->dev->of_node, 1);
-	if (IS_ERR_OR_NULL(kbdev->bus_clk)) {
-		err = PTR_ERR(kbdev->bus_clk);
-		kbdev->bus_clk = NULL;
-		if (err == -EPROBE_DEFER) {
-			dev_err(kbdev->dev, "Couldn't get the mali bus clock\n");
-			goto fail;
-		}
-		dev_info(kbdev->dev,
-			"Continuing without Mali bus clock\n");
-	} else {
-		err = clk_prepare_enable(kbdev->bus_clk);
-		if (err) {
-			dev_err(kbdev->dev,
-				"Failed to prepare and enable bus clock (%d)\n",
-				err);
-			goto fail;
-		}
-	}
 
 	kbdev->clock = of_clk_get(kbdev->dev->of_node, 0);
 	if (IS_ERR_OR_NULL(kbdev->clock)) {
@@ -4036,16 +3346,6 @@ if (kbdev->clock != NULL) {
 	kbdev->clock = NULL;
 }
 
-if (kbdev->bus_clk) {
-	clk_put(kbdev->bus_clk);
-	kbdev->bus_clk = NULL;
-}
-
-if (kbdev->mali_rst) {
-	reset_control_put(kbdev->mali_rst);
-	kbdev->mali_rst = NULL;
-}
-
 #ifdef CONFIG_REGULATOR
 	if (NULL != kbdev->regulator) {
 		regulator_put(kbdev->regulator);
@@ -4066,27 +3366,15 @@ static void power_control_term(struct kbase_device *kbdev)
 #endif
 
 	if (kbdev->clock) {
-		clk_disable_unprepare(kbdev->clock);
+		if (__clk_is_enabled(kbdev->clock))
+			clk_disable_unprepare(kbdev->clock);
 		clk_put(kbdev->clock);
 		kbdev->clock = NULL;
-	}
-
-	if (kbdev->bus_clk) {
-		clk_disable_unprepare(kbdev->bus_clk);
-		clk_put(kbdev->bus_clk);
-		kbdev->bus_clk = NULL;
-	}
-
-	if (kbdev->mali_rst) {
-		reset_control_assert(kbdev->mali_rst);
-		reset_control_put(kbdev->mali_rst);
-		kbdev->mali_rst = NULL;
 	}
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 12, 0)) && defined(CONFIG_OF) \
 			&& defined(CONFIG_REGULATOR)
 	if (kbdev->regulator) {
-		regulator_disable(kbdev->regulator);
 		regulator_put(kbdev->regulator);
 		kbdev->regulator = NULL;
 	}
@@ -4169,6 +3457,7 @@ static ssize_t debugfs_protected_debug_mode_read(struct file *file,
  * Contains the file operations for the "protected_debug_mode" debugfs file
  */
 static const struct file_operations fops_protected_debug_mode = {
+	.owner = THIS_MODULE,
 	.open = simple_open,
 	.read = debugfs_protected_debug_mode_read,
 	.llseek = default_llseek,
@@ -4178,6 +3467,16 @@ static int kbase_device_debugfs_init(struct kbase_device *kbdev)
 {
 	struct dentry *debugfs_ctx_defaults_directory;
 	int err;
+
+	/* prevent unprivileged use of debug file system
+	 * in old kernel version
+	 */
+#if (KERNEL_VERSION(4, 7, 0) <= LINUX_VERSION_CODE)
+	/* only for newer kernel version debug file system is safe */
+	const mode_t mode = 0644;
+#else
+	const mode_t mode = 0600;
+#endif
 
 	kbdev->mali_debugfs_directory = debugfs_create_dir(kbdev->devname,
 			NULL);
@@ -4226,11 +3525,11 @@ static int kbase_device_debugfs_init(struct kbase_device *kbdev)
 			kbdev->mali_debugfs_directory, kbdev,
 			&fops_jm_quirks);
 
-	debugfs_create_bool("infinite_cache", 0644,
+	debugfs_create_bool("infinite_cache", mode,
 			debugfs_ctx_defaults_directory,
 			&kbdev->infinite_cache_active_default);
 
-	debugfs_create_size_t("mem_pool_max_size", 0644,
+	debugfs_create_size_t("mem_pool_max_size", mode,
 			debugfs_ctx_defaults_directory,
 			&kbdev->mem_pool_max_size_default);
 
@@ -4350,6 +3649,18 @@ static void kbase_logging_started_cb(void *data)
 }
 #endif
 
+static struct attribute *kbase_scheduling_attrs[] = {
+	&dev_attr_serialize_jobs.attr,
+	NULL
+};
+
+static struct attribute *kbase_mempool_attrs[] = {
+	&dev_attr_max_size.attr,
+	&dev_attr_lp_max_size.attr,
+	&dev_attr_ctx_max_size.attr,
+	NULL
+};
+
 static struct attribute *kbase_attrs[] = {
 #ifdef CONFIG_MALI_DEBUG
 	&dev_attr_debug_command.attr,
@@ -4367,16 +3678,31 @@ static struct attribute *kbase_attrs[] = {
 	&dev_attr_js_scheduling_period.attr,
 	&dev_attr_power_policy.attr,
 	&dev_attr_core_mask.attr,
-	&dev_attr_mem_pool_size.attr,
-	&dev_attr_mem_pool_max_size.attr,
-	&dev_attr_lp_mem_pool_size.attr,
-	&dev_attr_lp_mem_pool_max_size.attr,
 	&dev_attr_js_ctx_scheduling_mode.attr,
 	NULL
 };
 
+#define SYSFS_MEMPOOL_GROUP "mempool"
+static const struct attribute_group kbase_mempool_attr_group = {
+	.name = SYSFS_MEMPOOL_GROUP,
+	.attrs = kbase_mempool_attrs,
+};
+
+#define SYSFS_SCHEDULING_GROUP "scheduling"
+static const struct attribute_group kbase_scheduling_attr_group = {
+	.name = SYSFS_SCHEDULING_GROUP,
+	.attrs = kbase_scheduling_attrs,
+};
+
 static const struct attribute_group kbase_attr_group = {
 	.attrs = kbase_attrs,
+};
+
+static const struct attribute_group *kbase_attr_groups[] = {
+	&kbase_mempool_attr_group,
+	&kbase_scheduling_attr_group,
+	&kbase_attr_group,
+	NULL,
 };
 
 static int kbase_platform_device_remove(struct platform_device *pdev)
@@ -4396,7 +3722,6 @@ static int kbase_platform_device_remove(struct platform_device *pdev)
 	}
 #endif
 
-
 	if (kbdev->inited_subsys & inited_dev_list) {
 		dev_list = kbase_dev_list_get();
 		list_del(&kbdev->entry);
@@ -4410,7 +3735,7 @@ static int kbase_platform_device_remove(struct platform_device *pdev)
 	}
 
 	if (kbdev->inited_subsys & inited_sysfs_group) {
-		sysfs_remove_group(&kbdev->dev->kobj, &kbase_attr_group);
+		sysfs_remove_groups(&kbdev->dev->kobj, kbase_attr_groups);
 		kbdev->inited_subsys &= ~inited_sysfs_group;
 	}
 
@@ -4430,13 +3755,6 @@ static int kbase_platform_device_remove(struct platform_device *pdev)
 		kbase_debug_job_fault_dev_term(kbdev);
 		kbdev->inited_subsys &= ~inited_job_fault;
 	}
-
-#ifdef CONFIG_MALI_DEVFREQ
-	if (kbdev->inited_subsys & inited_devfreq) {
-		kbase_devfreq_term(kbdev);
-		kbdev->inited_subsys &= ~inited_devfreq;
-	}
-#endif
 
 
 	if (kbdev->inited_subsys & inited_backend_late) {
@@ -4537,6 +3855,29 @@ static int kbase_platform_device_remove(struct platform_device *pdev)
 	return 0;
 }
 
+void kbase_backend_devfreq_term(struct kbase_device *kbdev)
+{
+#ifdef CONFIG_MALI_DEVFREQ
+	if (kbdev->inited_subsys & inited_devfreq) {
+		kbase_devfreq_term(kbdev);
+		kbdev->inited_subsys &= ~inited_devfreq;
+	}
+#endif
+}
+
+int kbase_backend_devfreq_init(struct kbase_device *kbdev)
+{
+#ifdef CONFIG_MALI_DEVFREQ
+	/* Devfreq uses hardware counters, so must be initialized after it. */
+	int err = kbase_devfreq_init(kbdev);
+
+	if (!err)
+		kbdev->inited_subsys |= inited_devfreq;
+	else
+		dev_err(kbdev->dev, "Continuing without devfreq\n");
+#endif /* CONFIG_MALI_DEVFREQ */
+	return 0;
+}
 
 /* Number of register accesses for the buffer that we allocate during
  * initialization time. The buffer size can be changed later via debugfs. */
@@ -4727,6 +4068,9 @@ static int kbase_platform_device_probe(struct platform_device *pdev)
 	}
 	kbdev->inited_subsys |= inited_vinstr;
 
+	/* The initialization of the devfreq is now embedded inside the
+	 * kbase_backend_late_init(), calling the kbase_backend_devfreq_init()
+	 * before the first trigger of pm_context_idle(). */
 	err = kbase_backend_late_init(kbdev);
 	if (err) {
 		dev_err(kbdev->dev, "Late backend initialization failed\n");
@@ -4735,16 +4079,6 @@ static int kbase_platform_device_probe(struct platform_device *pdev)
 	}
 	kbdev->inited_subsys |= inited_backend_late;
 
-
-
-#ifdef CONFIG_MALI_DEVFREQ
-	/* Devfreq uses hardware counters, so must be initialized after it. */
-	err = kbase_devfreq_init(kbdev);
-	if (!err)
-		kbdev->inited_subsys |= inited_devfreq;
-	else
-		dev_err(kbdev->dev, "Continuing without devfreq\n");
-#endif /* CONFIG_MALI_DEVFREQ */
 
 #ifdef MALI_KBASE_BUILD
 	err = kbase_debug_job_fault_dev_init(kbdev);
@@ -4782,12 +4116,13 @@ static int kbase_platform_device_probe(struct platform_device *pdev)
 	 * paragraph that starts with "Word of warning", currently the second-last
 	 * paragraph.
 	 */
-	err = sysfs_create_group(&kbdev->dev->kobj, &kbase_attr_group);
+	err = sysfs_create_groups(&kbdev->dev->kobj, kbase_attr_groups);
 	if (err) {
 		dev_err(&pdev->dev, "SysFS group creation failed\n");
 		kbase_platform_device_remove(pdev);
 		return err;
 	}
+
 	kbdev->inited_subsys |= inited_sysfs_group;
 
 	err = misc_register(&kbdev->mdev);
@@ -4848,13 +4183,16 @@ static int kbase_device_suspend(struct device *dev)
 	if (!kbdev)
 		return -ENODEV;
 
+	kbase_pm_suspend(kbdev);
+
 #if defined(CONFIG_MALI_DEVFREQ) && \
 		(LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
-	if (kbdev->inited_subsys & inited_devfreq)
-		devfreq_suspend_device(kbdev->devfreq);
+	dev_dbg(dev, "Callback %s\n", __func__);
+	if (kbdev->inited_subsys & inited_devfreq) {
+		kbase_devfreq_enqueue_work(kbdev, DEVFREQ_WORK_SUSPEND);
+		flush_workqueue(kbdev->devfreq_queue.workq);
+	}
 #endif
-
-	kbase_pm_suspend(kbdev);
 	return 0;
 }
 
@@ -4878,8 +4216,14 @@ static int kbase_device_resume(struct device *dev)
 
 #if defined(CONFIG_MALI_DEVFREQ) && \
 		(LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
-	if (kbdev->inited_subsys & inited_devfreq)
-		devfreq_resume_device(kbdev->devfreq);
+	dev_dbg(dev, "Callback %s\n", __func__);
+	if (kbdev->inited_subsys & inited_devfreq) {
+		mutex_lock(&kbdev->pm.lock);
+		if (kbdev->pm.active_count > 0)
+			kbase_devfreq_enqueue_work(kbdev, DEVFREQ_WORK_RESUME);
+		mutex_unlock(&kbdev->pm.lock);
+		flush_workqueue(kbdev->devfreq_queue.workq);
+	}
 #endif
 	return 0;
 }
@@ -4903,10 +4247,11 @@ static int kbase_device_runtime_suspend(struct device *dev)
 	if (!kbdev)
 		return -ENODEV;
 
+	dev_dbg(dev, "Callback %s\n", __func__);
 #if defined(CONFIG_MALI_DEVFREQ) && \
 		(LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
 	if (kbdev->inited_subsys & inited_devfreq)
-		devfreq_suspend_device(kbdev->devfreq);
+		kbase_devfreq_enqueue_work(kbdev, DEVFREQ_WORK_SUSPEND);
 #endif
 
 	if (kbdev->pm.backend.callback_power_runtime_off) {
@@ -4936,6 +4281,7 @@ static int kbase_device_runtime_resume(struct device *dev)
 	if (!kbdev)
 		return -ENODEV;
 
+	dev_dbg(dev, "Callback %s\n", __func__);
 	if (kbdev->pm.backend.callback_power_runtime_on) {
 		ret = kbdev->pm.backend.callback_power_runtime_on(kbdev);
 		dev_dbg(dev, "runtime resume\n");
@@ -4944,7 +4290,7 @@ static int kbase_device_runtime_resume(struct device *dev)
 #if defined(CONFIG_MALI_DEVFREQ) && \
 		(LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0))
 	if (kbdev->inited_subsys & inited_devfreq)
-		devfreq_resume_device(kbdev->devfreq);
+		kbase_devfreq_enqueue_work(kbdev, DEVFREQ_WORK_RESUME);
 #endif
 
 	return ret;
@@ -4970,6 +4316,7 @@ static int kbase_device_runtime_idle(struct device *dev)
 	if (!kbdev)
 		return -ENODEV;
 
+	dev_dbg(dev, "Callback %s\n", __func__);
 	/* Use platform specific implementation if it exists. */
 	if (kbdev->pm.backend.callback_power_runtime_idle)
 		return kbdev->pm.backend.callback_power_runtime_idle(kbdev);
@@ -4992,15 +4339,8 @@ static const struct dev_pm_ops kbase_pm_ops = {
 
 #ifdef CONFIG_OF
 static const struct of_device_id kbase_dt_ids[] = {
-	{ .compatible = "arm,mali-t604" },
-	{ .compatible = "arm,mali-t624" },
-	{ .compatible = "arm,mali-t628" },
-	{ .compatible = "arm,mali-t720" },
-	{ .compatible = "arm,mali-t760" },
-	{ .compatible = "arm,mali-t820" },
-	{ .compatible = "arm,mali-t830" },
-	{ .compatible = "arm,mali-t860" },
-	{ .compatible = "arm,mali-t880" },
+	{ .compatible = "arm,malit6xx" },
+	{ .compatible = "arm,mali-midgard" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, kbase_dt_ids);
@@ -5053,9 +4393,6 @@ module_exit(kbase_driver_exit);
 #endif /* CONFIG_OF */
 
 MODULE_LICENSE("GPL");
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0))
-MODULE_IMPORT_NS(DMA_BUF);
-#endif
 MODULE_VERSION(MALI_RELEASE_NAME " (UK version " \
 		__stringify(BASE_UK_VERSION_MAJOR) "." \
 		__stringify(BASE_UK_VERSION_MINOR) ")");

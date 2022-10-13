@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
- * (C) COPYRIGHT 2010-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2010-2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -142,13 +141,12 @@ void kbase_pm_clock_on(struct kbase_device *kbdev, bool is_resume);
  *
  * @kbdev:      The kbase device structure for the device (must be a valid
  *              pointer)
- * @is_suspend: true if clock off due to suspend, false otherwise
  *
  * Return: true  if clock was turned off, or
  *         false if clock can not be turned off due to pending page/bus fault
  *               workers. Caller must flush MMU workqueues and retry
  */
-bool kbase_pm_clock_off(struct kbase_device *kbdev, bool is_suspend);
+bool kbase_pm_clock_off(struct kbase_device *kbdev);
 
 /**
  * kbase_pm_enable_interrupts - Enable interrupts on the device.
@@ -482,10 +480,8 @@ void kbase_pm_do_poweron(struct kbase_device *kbdev, bool is_resume);
  *
  * @kbdev:      The kbase device structure for the device (must be a valid
  *              pointer)
- * @is_suspend: true if power off due to suspend,
- *              false otherwise
  */
-void kbase_pm_do_poweroff(struct kbase_device *kbdev, bool is_suspend);
+void kbase_pm_do_poweroff(struct kbase_device *kbdev);
 
 #if defined(CONFIG_MALI_DEVFREQ) || defined(CONFIG_MALI_MIDGARD_DVFS)
 void kbase_pm_get_dvfs_metrics(struct kbase_device *kbdev,

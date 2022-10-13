@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
- * (C) COPYRIGHT 2017-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2017-2018, 2020 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -30,67 +29,9 @@ extern "C" {
 #include <asm-generic/ioctl.h>
 #include <linux/types.h>
 
-#define KBASE_IOCTL_TYPE 0x80
+#include "jm/mali_kbase_jm_ioctl.h"
 
-/*
- * 10.1:
- * - Do mmap in kernel for SAME_VA memory allocations rather then
- *   calling back into the kernel as a 2nd stage of the allocation request.
- *
- * 10.2:
- * - Add KBASE_FUNC_MEM_JIT_INIT which allows clients to request a custom VA
- *   region for use with JIT (ignored on 32-bit platforms)
- *
- * 10.3:
- * - base_jd_core_req typedef-ed to u32 (instead of to u16)
- * - two flags added: BASE_JD_REQ_SKIP_CACHE_STAT / _END
- *
- * 10.4:
- * - Removed KBASE_FUNC_EXT_BUFFER_LOCK used only in internal tests
- *
- * 10.5:
- * - Reverted to performing mmap in user space so that tools like valgrind work.
- *
- * 10.6:
- * - Add flags input variable to KBASE_FUNC_TLSTREAM_ACQUIRE
- */
-/*
- * 11.1:
- * - Add BASE_MEM_TILER_ALIGN_TOP under base_mem_alloc_flags
- * 11.2:
- * - KBASE_MEM_QUERY_FLAGS can return KBASE_REG_PF_GROW and KBASE_REG_SECURE,
- *   which some user-side clients prior to 11.2 might fault if they received
- *   them
- * 11.3:
- * - New ioctls KBASE_IOCTL_STICKY_RESOURCE_MAP and
- *   KBASE_IOCTL_STICKY_RESOURCE_UNMAP
- * 11.4:
- * - New ioctl KBASE_IOCTL_MEM_FIND_GPU_START_AND_OFFSET
- * 11.5:
- * - New ioctl: KBASE_IOCTL_MEM_JIT_INIT (old ioctl renamed to _OLD)
- * 11.6:
- * - Added flags field to base_jit_alloc_info structure, which can be used to
- *   specify pseudo chunked tiler alignment for JIT allocations.
- * 11.7:
- * - Removed UMP support
- * 11.8:
- * - Added BASE_MEM_UNCACHED_GPU under base_mem_alloc_flags
- * 11.9:
- * - Added BASE_MEM_PERMANENT_KERNEL_MAPPING and BASE_MEM_FLAGS_KERNEL_ONLY
- *   under base_mem_alloc_flags
- * 11.10:
- * - Enabled the use of nr_extres field of base_jd_atom_v2 structure for
- *   JIT_ALLOC and JIT_FREE type softjobs to enable multiple JIT allocations
- *   with one softjob.
- * 11.11:
- * - Added BASE_MEM_GPU_VA_SAME_4GB_PAGE under base_mem_alloc_flags
- * 11.12:
- * - Removed ioctl: KBASE_IOCTL_GET_PROFILING_CONTROLS
- * 11.13:
- * - New ioctl: KBASE_IOCTL_MEM_EXEC_INIT
- */
-#define BASE_UK_VERSION_MAJOR 11
-#define BASE_UK_VERSION_MINOR 13
+#define KBASE_IOCTL_TYPE 0x80
 
 /**
  * struct kbase_ioctl_version_check - Check version compatibility with kernel
@@ -118,21 +59,6 @@ struct kbase_ioctl_set_flags {
 #define KBASE_IOCTL_SET_FLAGS \
 	_IOW(KBASE_IOCTL_TYPE, 1, struct kbase_ioctl_set_flags)
 
-/**
- * struct kbase_ioctl_job_submit - Submit jobs/atoms to the kernel
- *
- * @addr: Memory address of an array of struct base_jd_atom_v2
- * @nr_atoms: Number of entries in the array
- * @stride: sizeof(struct base_jd_atom_v2)
- */
-struct kbase_ioctl_job_submit {
-	__u64 addr;
-	__u32 nr_atoms;
-	__u32 stride;
-};
-
-#define KBASE_IOCTL_JOB_SUBMIT \
-	_IOW(KBASE_IOCTL_TYPE, 2, struct kbase_ioctl_job_submit)
 
 /**
  * struct kbase_ioctl_get_gpuprops - Read GPU properties from the kernel
@@ -168,9 +94,6 @@ struct kbase_ioctl_get_gpuprops {
 
 #define KBASE_IOCTL_GET_GPUPROPS \
 	_IOW(KBASE_IOCTL_TYPE, 3, struct kbase_ioctl_get_gpuprops)
-
-#define KBASE_IOCTL_POST_TERM \
-	_IO(KBASE_IOCTL_TYPE, 4)
 
 /**
  * union kbase_ioctl_mem_alloc - Allocate memory on the GPU
@@ -586,21 +509,6 @@ struct kbase_ioctl_mem_profile_add {
 	_IOW(KBASE_IOCTL_TYPE, 27, struct kbase_ioctl_mem_profile_add)
 
 /**
- * struct kbase_ioctl_soft_event_update - Update the status of a soft-event
- * @event: GPU address of the event which has been updated
- * @new_status: The new status to set
- * @flags: Flags for future expansion
- */
-struct kbase_ioctl_soft_event_update {
-	__u64 event;
-	__u32 new_status;
-	__u32 flags;
-};
-
-#define KBASE_IOCTL_SOFT_EVENT_UPDATE \
-	_IOW(KBASE_IOCTL_TYPE, 28, struct kbase_ioctl_soft_event_update)
-
-/**
  * struct kbase_ioctl_sticky_resource_map - Permanently map an external resource
  * @count: Number of resources
  * @address: Array of u64 GPU addresses of the external resources to map
@@ -696,7 +604,6 @@ union kbase_ioctl_cinstr_gwt_dump {
 #define KBASE_IOCTL_CINSTR_GWT_DUMP \
 	_IOWR(KBASE_IOCTL_TYPE, 35, union kbase_ioctl_cinstr_gwt_dump)
 
-
 /**
  * struct kbase_ioctl_mem_exec_init - Initialise the EXEC_VA memory zone
  *
@@ -708,7 +615,6 @@ struct kbase_ioctl_mem_exec_init {
 
 #define KBASE_IOCTL_MEM_EXEC_INIT \
 	_IOW(KBASE_IOCTL_TYPE, 38, struct kbase_ioctl_mem_exec_init)
-
 
 /***************
  * test ioctls *
@@ -751,38 +657,7 @@ struct kbase_ioctl_tlstream_stats {
 #define KBASE_IOCTL_TLSTREAM_STATS \
 	_IOR(KBASE_IOCTL_TEST_TYPE, 2, struct kbase_ioctl_tlstream_stats)
 
-/**
- * struct kbase_ioctl_cs_event_memory_write - Write an event memory address
- * @cpu_addr: Memory address to write
- * @value: Value to write
- * @padding: Currently unused, must be zero
- */
-struct kbase_ioctl_cs_event_memory_write {
-	__u64 cpu_addr;
-	__u8 value;
-	__u8 padding[7];
-};
-
-/**
- * union kbase_ioctl_cs_event_memory_read - Read an event memory address
- * @cpu_addr: Memory address to read
- * @value: Value read
- * @padding: Currently unused, must be zero
- *
- * @in: Input parameters
- * @out: Output parameters
- */
-union kbase_ioctl_cs_event_memory_read {
-	struct {
-		__u64 cpu_addr;
-	} in;
-	struct {
-		__u8 value;
-		__u8 padding[7];
-	} out;
-};
-
-#endif
+#endif /* MALI_UNIT_TEST */
 
 /* Customer extension range */
 #define KBASE_IOCTL_EXTRA_TYPE (KBASE_IOCTL_TYPE + 2)
@@ -811,9 +686,9 @@ union kbase_ioctl_cs_event_memory_read {
 #define KBASE_GPUPROP_VERSION_STATUS			2
 #define KBASE_GPUPROP_MINOR_REVISION			3
 #define KBASE_GPUPROP_MAJOR_REVISION			4
-#define KBASE_GPUPROP_GPU_SPEED_MHZ			5
+/* 5 previously used for GPU speed */
 #define KBASE_GPUPROP_GPU_FREQ_KHZ_MAX			6
-#define KBASE_GPUPROP_GPU_FREQ_KHZ_MIN			7
+/* 7 previously used for minimum GPU speed */
 #define KBASE_GPUPROP_LOG2_PROGRAM_COUNTER_SIZE		8
 #define KBASE_GPUPROP_TEXTURE_FEATURES_0		9
 #define KBASE_GPUPROP_TEXTURE_FEATURES_1		10
@@ -840,7 +715,7 @@ union kbase_ioctl_cs_event_memory_read {
 #define KBASE_GPUPROP_RAW_L2_PRESENT			27
 #define KBASE_GPUPROP_RAW_STACK_PRESENT			28
 #define KBASE_GPUPROP_RAW_L2_FEATURES			29
-#define KBASE_GPUPROP_RAW_SUSPEND_SIZE			30
+#define KBASE_GPUPROP_RAW_CORE_FEATURES			30
 #define KBASE_GPUPROP_RAW_MEM_FEATURES			31
 #define KBASE_GPUPROP_RAW_MMU_FEATURES			32
 #define KBASE_GPUPROP_RAW_AS_PRESENT			33
@@ -891,6 +766,14 @@ union kbase_ioctl_cs_event_memory_read {
 #define KBASE_GPUPROP_COHERENCY_GROUP_13		77
 #define KBASE_GPUPROP_COHERENCY_GROUP_14		78
 #define KBASE_GPUPROP_COHERENCY_GROUP_15		79
+
+#define KBASE_GPUPROP_TEXTURE_FEATURES_3		80
+#define KBASE_GPUPROP_RAW_TEXTURE_FEATURES_3		81
+
+#define KBASE_GPUPROP_NUM_EXEC_ENGINES                  82
+
+#define KBASE_GPUPROP_RAW_THREAD_TLS_ALLOC		83
+#define KBASE_GPUPROP_TLS_ALLOC				84
 
 #ifdef __cpluscplus
 }

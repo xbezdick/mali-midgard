@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
  * (C) COPYRIGHT 2011-2015,2017 ARM Limited. All rights reserved.
@@ -5,7 +6,7 @@
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -53,18 +52,6 @@ void kbase_gpuprops_set(struct kbase_device *kbdev);
  * kbase_hw_set_features_mask().
  */
 void kbase_gpuprops_set_features(struct kbase_device *kbdev);
-
-/**
- * @brief Provide GPU properties to userside through UKU call.
- *
- * Fill the struct kbase_uk_gpuprops with values from GPU configuration registers.
- *
- * @param kctx		The struct kbase_context structure
- * @param kbase_props	A copy of the struct kbase_uk_gpuprops structure from userspace
- *
- * @return 0 on success. Any other value indicates failure.
- */
-int kbase_gpuprops_uk_get_props(struct kbase_context *kctx, struct kbase_uk_gpuprops * const kbase_props);
 
 /**
  * kbase_gpuprops_populate_user_buffer - Populate the GPU properties buffer

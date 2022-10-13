@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
  * (C) COPYRIGHT 2010-2017 ARM Limited. All rights reserved.
@@ -5,7 +6,7 @@
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -209,26 +208,7 @@ struct kbase_pm_callback_conf {
 	 * suspeneded by runtime PM, else OS error code
 	 */
 	int (*power_runtime_idle_callback)(struct kbase_device *kbdev);
-
-	/*
-	 * Optional callback for Software Reset
-	 */
-	int (*soft_reset_callback)(struct kbase_device *kbdev);
 };
-
-/**
- * kbase_gpu_clk_speed_func - Type of the function pointer for GPU_SPEED_FUNC
- * @param clock_speed - pointer to store the current GPU clock speed in MHz
- *
- * Returns 0 on success, otherwise negative error code.
- * When an error is returned the caller assumes maximum GPU speed stored in
- * gpu_freq_khz_max.
- *
- * If the system timer is not available then this function is required
- * for the OpenCL queue profiling to return correct timing information.
- *
- */
-typedef int (*kbase_gpu_clk_speed_func) (u32 *clock_speed);
 
 #ifdef CONFIG_OF
 struct kbase_platform_config {

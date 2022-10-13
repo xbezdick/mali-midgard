@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
  * (C) COPYRIGHT 2014-2018 ARM Limited. All rights reserved.
@@ -5,7 +6,7 @@
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -41,8 +40,8 @@ void kbase_backend_gpuprops_get(struct kbase_device *kbdev,
 
 	regdump->l2_features = kbase_reg_read(kbdev,
 				GPU_CONTROL_REG(L2_FEATURES));
-	regdump->suspend_size = kbase_reg_read(kbdev,
-				GPU_CONTROL_REG(SUSPEND_SIZE));
+	regdump->core_features = kbase_reg_read(kbdev,
+				GPU_CONTROL_REG(CORE_FEATURES));
 	regdump->tiler_features = kbase_reg_read(kbdev,
 				GPU_CONTROL_REG(TILER_FEATURES));
 	regdump->mem_features = kbase_reg_read(kbdev,
@@ -70,6 +69,8 @@ void kbase_backend_gpuprops_get(struct kbase_device *kbdev,
 				GPU_CONTROL_REG(THREAD_MAX_BARRIER_SIZE));
 	regdump->thread_features = kbase_reg_read(kbdev,
 				GPU_CONTROL_REG(THREAD_FEATURES));
+	regdump->thread_tls_alloc = kbase_reg_read(kbdev,
+				GPU_CONTROL_REG(THREAD_TLS_ALLOC));
 
 	regdump->shader_present_lo = kbase_reg_read(kbdev,
 				GPU_CONTROL_REG(SHADER_PRESENT_LO));

@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
- * (C) COPYRIGHT 2014-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2020 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -94,10 +93,16 @@ enum kbase_l2_core_state {
  *
  * @KBASE_SHADERS_OFF_CORESTACK_OFF: The shaders and core stacks are off
  * @KBASE_SHADERS_OFF_CORESTACK_PEND_ON: The shaders are off, core stacks have
- *                                       been requested to power on
+ *                                       been requested to power on and hwcnt
+ *                                       is being disabled
  * @KBASE_SHADERS_PEND_ON_CORESTACK_ON: Core stacks are on, shaders have been
- *                                      requested to power on
- * @KBASE_SHADERS_ON_CORESTACK_ON: The shaders and core stacks are on
+ *                                      requested to power on.
+ * @KBASE_SHADERS_ON_CORESTACK_ON: The shaders and core stacks are on, and hwcnt
+ *					already enabled.
+ * @KBASE_SHADERS_ON_CORESTACK_ON_RECHECK: The shaders and core stacks
+ *                                      are on, hwcnt disabled, and checks
+ *                                      to powering down or re-enabling
+ *                                      hwcnt.
  * @KBASE_SHADERS_WAIT_OFF_CORESTACK_ON: The shaders have been requested to
  *                                       power off, but they remain on for the
  *                                       duration of the hysteresis timer
@@ -118,6 +123,7 @@ enum kbase_shader_core_state {
 	KBASE_SHADERS_OFF_CORESTACK_PEND_ON,
 	KBASE_SHADERS_PEND_ON_CORESTACK_ON,
 	KBASE_SHADERS_ON_CORESTACK_ON,
+	KBASE_SHADERS_ON_CORESTACK_ON_RECHECK,
 	KBASE_SHADERS_WAIT_OFF_CORESTACK_ON,
 	KBASE_SHADERS_WAIT_FINISHED_CORESTACK_ON,
 	KBASE_SHADERS_PEND_OFF_CORESTACK_ON,
@@ -245,8 +251,15 @@ union kbase_pm_policy_data {
  *                             machines
  * @gpu_powered:       Set to true when the GPU is powered and register
  *                     accesses are possible, false otherwise
- * @instr_enabled:     Set to true when instrumentation is enabled,
- *                     false otherwise
+ * @gpu_ready:         Indicates whether the GPU is in a state in which it is
+ *                     safe to perform PM changes. When false, the PM state
+ *                     machine needs to wait before making changes to the GPU
+ *                     power policy, DevFreq or core_mask, so as to avoid these
+ *                     changing while implicit GPU resets are ongoing.
+ * @pm_shaders_core_mask: Shader PM state synchronised shaders core mask. It
+ *                     holds the cores enabled in a hardware counters dump,
+ *                     and may differ from @shaders_avail when under different
+ *                     states and transitions.
  * @cg1_disabled:      Set if the policy wants to keep the second core group
  *                     powered off
  * @driver_ready_for_irqs: Debug state indicating whether sufficient
@@ -265,8 +278,6 @@ union kbase_pm_policy_data {
  *                    when poweroff_wait_in_progress is true, and therefore the
  *                    GPU can not immediately be powered on. pm.lock must be
  *                    held when accessing
- * @poweroff_is_suspend: true if the GPU is being powered off due to a suspend
- *                       request. pm.lock must be held when accessing
  * @gpu_poweroff_wait_wq: workqueue for waiting for GPU to power off
  * @gpu_poweroff_wait_work: work item for use with @gpu_poweroff_wait_wq
  * @poweroff_wait: waitqueue for waiting for @gpu_poweroff_wait_work to complete
@@ -331,8 +342,9 @@ struct kbase_pm_backend_data {
 	wait_queue_head_t gpu_in_desired_state_wait;
 
 	bool gpu_powered;
+	bool gpu_ready;
 
-	bool instr_enabled;
+	u64 pm_shaders_core_mask;
 
 	bool cg1_disabled;
 
@@ -349,7 +361,6 @@ struct kbase_pm_backend_data {
 	bool poweroff_wait_in_progress;
 	bool invoke_poweroff_wait_wq_when_l2_off;
 	bool poweron_required;
-	bool poweroff_is_suspend;
 
 	struct workqueue_struct *gpu_poweroff_wait_wq;
 	struct work_struct gpu_poweroff_wait_work;

@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2010-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2010-2018, 2020-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -38,6 +37,7 @@ kbase_create_context(struct kbase_device *kbdev, bool is_compat)
 	struct kbase_context *kctx;
 	int err;
 	struct page *p;
+	size_t max_size_default;
 
 	KBASE_DEBUG_ASSERT(kbdev != NULL);
 
@@ -69,8 +69,9 @@ kbase_create_context(struct kbase_device *kbdev, bool is_compat)
 	kctx->tgid = current->tgid;
 	kctx->pid = current->pid;
 
+	max_size_default = kbase_mem_pool_ctx_max_size(kbdev);
 	err = kbase_mem_pool_init(&kctx->mem_pool,
-				  kbdev->mem_pool_max_size_default,
+				  max_size_default,
 				  KBASE_MEM_POOL_4KB_PAGE_TABLE_ORDER,
 				  kctx->kbdev,
 				  &kbdev->mem_pool);
@@ -78,7 +79,7 @@ kbase_create_context(struct kbase_device *kbdev, bool is_compat)
 		goto free_kctx;
 
 	err = kbase_mem_pool_init(&kctx->lp_mem_pool,
-				  (kbdev->mem_pool_max_size_default >> 9),
+				  (max_size_default >> 9),
 				  KBASE_MEM_POOL_2MB_PAGE_TABLE_ORDER,
 				  kctx->kbdev,
 				  &kbdev->lp_mem_pool);
@@ -211,10 +212,18 @@ void kbase_destroy_context(struct kbase_context *kctx)
 
 	KBASE_TRACE_ADD(kbdev, CORE_CTX_DESTROY, kctx, NULL, 0u, 0u);
 
-	/* Ensure the core is powered up for the destroy process */
-	/* A suspend won't happen here, because we're in a syscall from a userspace
-	 * thread. */
-	kbase_pm_context_active(kbdev);
+	/* Context termination could happen whilst the system suspend of
+	 * the GPU device is ongoing or has completed. It has been seen on
+	 * Customer side that a hang could occur if context termination is
+	 * not blocked until the resume of GPU device.
+	 */
+	while (kbase_pm_context_active_handle_suspend(
+		kbdev, KBASE_PM_SUSPEND_HANDLER_DONT_INCREASE)) {
+		dev_info(kbdev->dev,
+			 "Suspend in progress when destroying context");
+		wait_event(kbdev->pm.resume_wait,
+			   !kbase_pm_is_suspending(kbdev));
+	}
 
 	kbase_mem_pool_mark_dying(&kctx->mem_pool);
 

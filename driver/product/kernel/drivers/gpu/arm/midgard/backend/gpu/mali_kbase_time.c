@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
  * (C) COPYRIGHT 2014-2016,2018 ARM Limited. All rights reserved.
@@ -5,7 +6,7 @@
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,8 +17,6 @@
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
 
 #include <mali_kbase.h>
@@ -26,7 +25,7 @@
 #include <backend/gpu/mali_kbase_pm_internal.h>
 
 void kbase_backend_get_gpu_time(struct kbase_device *kbdev, u64 *cycle_counter,
-				u64 *system_time, struct timespec64 *ts)
+				u64 *system_time, struct timespec *ts)
 {
 	u32 hi1, hi2;
 
@@ -53,7 +52,7 @@ void kbase_backend_get_gpu_time(struct kbase_device *kbdev, u64 *cycle_counter,
 	} while (hi1 != hi2);
 
 	/* Record the CPU's idea of current time */
-	ktime_get_raw_ts64(ts);
+	getrawmonotonic(ts);
 
 	kbase_pm_release_gpu_cycle_counter(kbdev);
 }

@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2011-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2020 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -124,6 +123,7 @@ static int kbasep_vinstr_hwcnt_reader_release(
 
 /* Vinstr client file operations */
 static const struct file_operations vinstr_client_fops = {
+	.owner = THIS_MODULE,
 	.poll           = kbasep_vinstr_hwcnt_reader_poll,
 	.unlocked_ioctl = kbasep_vinstr_hwcnt_reader_ioctl,
 	.compat_ioctl   = kbasep_vinstr_hwcnt_reader_ioctl,
@@ -138,9 +138,9 @@ static const struct file_operations vinstr_client_fops = {
  */
 static u64 kbasep_vinstr_timestamp_ns(void)
 {
-	struct timespec64 ts;
+	struct timespec ts;
 
-	ktime_get_raw_ts64(&ts);
+	getrawmonotonic(&ts);
 	return (u64)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 }
 
@@ -573,16 +573,6 @@ int kbase_vinstr_hwcnt_reader_setup(
 	if (errcode)
 		goto error;
 
-	errcode = anon_inode_getfd(
-		"[mali_vinstr_desc]",
-		&vinstr_client_fops,
-		vcli,
-		O_RDONLY | O_CLOEXEC);
-	if (errcode < 0)
-		goto error;
-
-	fd = errcode;
-
 	/* Add the new client. No need to reschedule worker, as not periodic */
 	mutex_lock(&vctx->lock);
 
@@ -591,7 +581,26 @@ int kbase_vinstr_hwcnt_reader_setup(
 
 	mutex_unlock(&vctx->lock);
 
+	/* Expose to user-space only once the client is fully initialized */
+	errcode = anon_inode_getfd(
+		"[mali_vinstr_desc]",
+		&vinstr_client_fops,
+		vcli,
+		O_RDONLY | O_CLOEXEC);
+	if (errcode < 0)
+		goto client_installed_error;
+
+	fd = errcode;
+
 	return fd;
+
+client_installed_error:
+	mutex_lock(&vctx->lock);
+
+	vctx->client_count--;
+	list_del(&vcli->node);
+
+	mutex_unlock(&vctx->lock);
 error:
 	kbasep_vinstr_client_destroy(vcli);
 	return errcode;
@@ -891,7 +900,7 @@ static long kbasep_vinstr_hwcnt_reader_ioctl(
 			cli, (enum base_hwcnt_reader_event)arg);
 		break;
 	default:
-		WARN_ON(true);
+		pr_warn("Unknown HWCNT ioctl 0x%x nr:%d", cmd, _IOC_NR(cmd));
 		rcode = -EINVAL;
 		break;
 	}

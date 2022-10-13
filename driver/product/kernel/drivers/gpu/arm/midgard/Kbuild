@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # (C) COPYRIGHT 2012-2018 ARM Limited. All rights reserved.
 #
 # This program is free software and is provided to you under the terms of the
 # GNU General Public License version 2 as published by the Free Software
 # Foundation, and any use by you of this program is subject to the terms
-# of such GNU licence.
+# of such GNU license.
 #
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,13 +16,11 @@
 # along with this program; if not, you can access it online at
 # http://www.gnu.org/licenses/gpl-2.0.html.
 #
-# SPDX-License-Identifier: GPL-2.0
-#
 #
 
 
 # Driver version string which is returned to userspace via an ioctl
-MALI_RELEASE_NAME ?= "r28p0-01rel0"
+MALI_RELEASE_NAME ?= "r31p0-01eac0"
 
 # Paths required for build
 KBASE_PATH = $(src)

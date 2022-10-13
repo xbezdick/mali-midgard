@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
  * (C) COPYRIGHT 2016-2018 ARM Limited. All rights reserved.
@@ -5,7 +6,7 @@
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -92,9 +91,9 @@ static irqreturn_t kbase_gpu_irq_custom_handler(int irq, void *data)
 
 	val = kbase_reg_read(kbdev, GPU_CONTROL_REG(GPU_IRQ_STATUS));
 	if (val & TEST_IRQ) {
-		struct timespec64 tval;
+		struct timespec tval;
 
-		ktime_get_real_ts64(&tval);
+		getnstimeofday(&tval);
 		irq_time = SEC_TO_NANO(tval.tv_sec) + (tval.tv_nsec);
 
 		kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_CLEAR), val);
@@ -183,12 +182,12 @@ static void mali_kutf_irq_latency(struct kutf_context *context)
 			GPU_IRQ_HANDLER);
 
 	for (i = 0; i < NR_TEST_IRQS; i++) {
-		struct timespec64 tval;
+		struct timespec tval;
 		u64 start_time;
 		int ret;
 
 		triggered = false;
-		ktime_get_real_ts64(&tval);
+		getnstimeofday(&tval);
 		start_time = SEC_TO_NANO(tval.tv_sec) + (tval.tv_nsec);
 
 		/* Trigger fake IRQ */

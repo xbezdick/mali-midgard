@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2018, 2020 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -683,21 +682,14 @@ bool kbase_hwcnt_context_disable_atomic(struct kbase_hwcnt_context *hctx)
 
 	if (!WARN_ON(hctx->disable_count == SIZE_MAX)) {
 		/*
-		 * If disable count is non-zero or no counters are enabled, we
-		 * can just bump the disable count.
+		 * If disable count is non-zero, we can just bump the disable
+		 * count.
 		 *
 		 * Otherwise, we can't disable in an atomic context.
 		 */
 		if (hctx->disable_count != 0) {
 			hctx->disable_count++;
 			atomic_disabled = true;
-		} else {
-			WARN_ON(!hctx->accum_inited);
-			if (!hctx->accum.enable_map_any_enabled) {
-				hctx->disable_count++;
-				hctx->accum.state = ACCUM_STATE_DISABLED;
-				atomic_disabled = true;
-			}
 		}
 	}
 

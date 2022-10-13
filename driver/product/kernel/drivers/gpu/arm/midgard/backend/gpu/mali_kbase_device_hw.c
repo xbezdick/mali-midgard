@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2014-2016,2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2016,2018-2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -258,6 +257,15 @@ void kbase_gpu_start_cache_clean(struct kbase_device *kbdev)
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 }
 
+void kbase_gpu_cache_clean_wait_complete(struct kbase_device *kbdev)
+{
+	lockdep_assert_held(&kbdev->hwaccess_lock);
+
+	kbdev->cache_clean_queued = false;
+	kbdev->cache_clean_in_progress = false;
+	wake_up(&kbdev->cache_clean_wait);
+}
+
 static void kbase_clean_caches_done(struct kbase_device *kbdev)
 {
 	u32 irq_mask;
@@ -277,9 +285,7 @@ static void kbase_clean_caches_done(struct kbase_device *kbdev)
 		kbase_reg_write(kbdev, GPU_CONTROL_REG(GPU_IRQ_MASK),
 				irq_mask & ~CLEAN_CACHES_COMPLETED);
 
-		kbdev->cache_clean_in_progress = false;
-
-		wake_up(&kbdev->cache_clean_wait);
+		kbase_gpu_cache_clean_wait_complete(kbdev);
 	}
 
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);

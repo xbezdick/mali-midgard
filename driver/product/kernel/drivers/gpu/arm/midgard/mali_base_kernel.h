@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
- * (C) COPYRIGHT 2010-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2010-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -28,12 +27,6 @@
 
 #ifndef _BASE_KERNEL_H_
 #define _BASE_KERNEL_H_
-
-/* Support UK10_2 IOCTLS */
-#define BASE_LEGACY_UK10_2_SUPPORT 1
-
-/* Support UK10_4 IOCTLS */
-#define BASE_LEGACY_UK10_4_SUPPORT 1
 
 typedef struct base_mem_handle {
 	struct {
@@ -56,7 +49,7 @@ typedef struct base_mem_handle {
 #define BASE_JD_SOFT_EVENT_SET             ((unsigned char)1)
 #define BASE_JD_SOFT_EVENT_RESET           ((unsigned char)0)
 
-#define BASE_GPU_NUM_TEXTURE_FEATURES_REGISTERS 3
+#define BASE_GPU_NUM_TEXTURE_FEATURES_REGISTERS 4
 
 #define BASE_MAX_COHERENT_GROUPS 16
 
@@ -145,7 +138,12 @@ typedef u32 base_mem_alloc_flags;
  */
 #define BASE_MEM_GPU_VA_SAME_4GB_PAGE ((base_mem_alloc_flags)1 << 6)
 
-#define BASE_MEM_RESERVED_BIT_7 ((base_mem_alloc_flags)1 << 7)
+/*
+ * Userspace is not allowed to free this memory.
+ * Flag is only allowed on allocations originating from kbase.
+ */
+#define BASEP_MEM_NO_USER_FREE ((base_mem_alloc_flags)1 << 7)
+
 #define BASE_MEM_RESERVED_BIT_8 ((base_mem_alloc_flags)1 << 8)
 
 /* Grow backing store on GPU Page Fault
@@ -242,8 +240,7 @@ typedef u32 base_mem_alloc_flags;
 /* A mask of all currently reserved flags
  */
 #define BASE_MEM_FLAGS_RESERVED \
-	(BASE_MEM_RESERVED_BIT_7 | BASE_MEM_RESERVED_BIT_8 | \
-		BASE_MEM_MAYBE_RESERVED_BIT_19)
+	(BASE_MEM_RESERVED_BIT_8 | BASE_MEM_RESERVED_BIT_19)
 
 /* A mask of all the flags which are only valid for allocations within kbase,
  * and may not be passed from user space.
@@ -352,14 +349,6 @@ struct base_mem_import_user_buffer {
 /* Maximum size allowed in a single KBASE_IOCTL_MEM_ALLOC call */
 #define KBASE_MEM_ALLOC_MAX_SIZE ((8ull << 30) >> PAGE_SHIFT) /* 8 GB */
 
-/**
- * @brief Result codes of changing the size of the backing store allocated to a tmem region
- */
-typedef enum base_backing_threshold_status {
-	BASE_BACKING_THRESHOLD_OK = 0,			    /**< Resize successful */
-	BASE_BACKING_THRESHOLD_ERROR_OOM = -2,		    /**< Increase failed due to an out-of-memory condition */
-	BASE_BACKING_THRESHOLD_ERROR_INVALID_ARGUMENTS = -4 /**< Invalid arguments (not tmem, illegal size request, etc.) */
-} base_backing_threshold_status;
 
 /**
  * @addtogroup base_user_api_memory_defered User-side Base Defered Memory Coherency APIs
@@ -1373,7 +1362,7 @@ typedef struct base_dump_cpu_gpu_counters {
  * @{
  */
 
-#define BASE_GPU_NUM_TEXTURE_FEATURES_REGISTERS 3
+#define BASE_GPU_NUM_TEXTURE_FEATURES_REGISTERS 4
 
 #define BASE_MAX_COHERENT_GROUPS 16
 
@@ -1405,23 +1394,10 @@ struct mali_base_gpu_core_props {
 
 	u16 padding;
 
-	/**
-	 * This property is deprecated since it has not contained the real current
-	 * value of GPU clock speed. It is kept here only for backwards compatibility.
-	 * For the new ioctl interface, it is ignored and is treated as a padding
-	 * to keep the structure of the same size and retain the placement of its
-	 * members.
-	 */
-	u32 gpu_speed_mhz;
-
-	/**
-	 * @usecase GPU clock max/min speed is required for computing best/worst case
-	 * in tasks as job scheduling ant irq_throttling. (It is not specified in the
-	 *  Midgard Architecture).
-	 * Also, GPU clock max speed is used for OpenCL's clGetDeviceInfo() function.
+	/* The maximum GPU frequency. Reported to applications by
+	 * clGetDeviceInfo()
 	 */
 	u32 gpu_freq_khz_max;
-	u32 gpu_freq_khz_min;
 
 	/**
 	 * Size of the shader program counter, in bits.
@@ -1448,6 +1424,11 @@ struct mali_base_gpu_core_props {
 	 * client will not be expecting to allocate anywhere near this value.
 	 */
 	u64 gpu_available_memory_size;
+
+	/**
+	 * The number of execution engines.
+	 */
+	u8 num_exec_engines;
 };
 
 /**
@@ -1478,7 +1459,10 @@ struct mali_base_gpu_thread_props {
 	u8  max_task_queue;         /* Max. tasks [1..255] which may be sent to a core before it becomes blocked. */
 	u8  max_thread_group_split; /* Max. allowed value [1..15] of the Thread Group Split field. */
 	u8  impl_tech;              /* 0 = Not specified, 1 = Silicon, 2 = FPGA, 3 = SW Model/Emulation */
-	u8  padding[7];
+	u8  padding[3];
+	u32 tls_alloc;              /* Number of threads per core that TLS must
+				     * be allocated for
+				     */
 };
 
 /**
@@ -1560,7 +1544,7 @@ struct gpu_raw_gpu_props {
 	u64 stack_present;
 
 	u32 l2_features;
-	u32 suspend_size; /* API 8.2+ */
+	u32 core_features;
 	u32 mem_features;
 	u32 mmu_features;
 
@@ -1583,6 +1567,8 @@ struct gpu_raw_gpu_props {
 	 * available modes as exposed in the coherency_features register.
 	 */
 	u32 coherency_mode;
+
+	u32 thread_tls_alloc;
 };
 
 /**
@@ -1740,20 +1726,6 @@ typedef struct base_jd_replay_payload {
 	 */
 	base_jd_core_req fragment_core_req;
 } base_jd_replay_payload;
-
-#ifdef BASE_LEGACY_UK10_2_SUPPORT
-typedef struct base_jd_replay_payload_uk10_2 {
-	u64 tiler_jc_list;
-	u64 fragment_jc;
-	u64 tiler_heap_free;
-	u16 fragment_hierarchy_mask;
-	u16 tiler_hierarchy_mask;
-	u32 hierarchy_default_weight;
-	u16 tiler_core_req;
-	u16 fragment_core_req;
-	u8 padding[4];
-} base_jd_replay_payload_uk10_2;
-#endif /* BASE_LEGACY_UK10_2_SUPPORT */
 
 /**
  * @brief An entry in the linked list of job chains to be replayed. This must

@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
- * (C) COPYRIGHT 2014-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -247,14 +246,16 @@ void kbase_job_check_leave_disjoint(struct kbase_device *kbdev,
 		struct kbase_jd_atom *target_katom);
 
 /**
- * kbase_backend_jm_kill_jobs_from_kctx - Kill all jobs that are currently
- *                                        running from a context
+ * kbase_backend_jm_kill_running_jobs_from_kctx - Kill all jobs that are
+ *                               currently running on GPU from a context
  * @kctx: Context pointer
  *
  * This is used in response to a page fault to remove all jobs from the faulting
  * context from the hardware.
+ *
+ * Caller must hold hwaccess_lock.
  */
-void kbase_backend_jm_kill_jobs_from_kctx(struct kbase_context *kctx);
+void kbase_backend_jm_kill_running_jobs_from_kctx(struct kbase_context *kctx);
 
 /**
  * kbase_jm_wait_for_zero_jobs - Wait for context to have zero jobs running, and

@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2012-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2012-2020 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -85,7 +84,9 @@ int kbase_sync_fence_out_create(struct kbase_jd_atom *katom, int stream_fd)
 	/* create a sync_file fd representing the fence */
 	sync_file = sync_file_create(fence);
 	if (!sync_file) {
+#if (KERNEL_VERSION(4, 9, 67) >= LINUX_VERSION_CODE)
 		dma_fence_put(fence);
+#endif
 		kbase_fence_out_remove(katom);
 		return -ENOMEM;
 	}
@@ -173,7 +174,7 @@ static void kbase_fence_wait_callback(struct dma_fence *fence,
 #if (KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE || \
 	 (KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE && \
 	  KERNEL_VERSION(4, 9, 68) <= LINUX_VERSION_CODE))
-	if (dma_fence_is_signaled(kcb->fence) && kcb->fence->error)
+	if (dma_fence_is_signaled(kcb->fence) && kcb->fence->error < 0)
 #else
 	if (dma_fence_is_signaled(kcb->fence) && kcb->fence->status < 0)
 #endif

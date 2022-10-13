@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2018-2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,8 +17,6 @@
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
 
 #include "mali_kbase_hwcnt_backend_gpu.h"
@@ -25,6 +24,7 @@
 #include "mali_kbase_hwcnt_types.h"
 #include "mali_kbase.h"
 #include "mali_kbase_pm_policy.h"
+#include "mali_kbase_pm_ca.h"
 #include "mali_kbase_hwaccess_instr.h"
 #include "mali_kbase_tlstream.h"
 #ifdef CONFIG_MALI_NO_MALI
@@ -58,6 +58,7 @@ struct kbase_hwcnt_backend_gpu_info {
  * @cpu_dump_va:  CPU mapping of gpu_dump_va.
  * @vmap:         Dump buffer vmap.
  * @enabled:      True if dumping has been enabled, else false.
+ * @pm_core_mask:  PM state sync-ed shaders core mask for the enabled dumping.
  */
 struct kbase_hwcnt_backend_gpu {
 	const struct kbase_hwcnt_backend_gpu_info *info;
@@ -67,16 +68,17 @@ struct kbase_hwcnt_backend_gpu {
 	void *cpu_dump_va;
 	struct kbase_vmap_struct *vmap;
 	bool enabled;
+	u64 pm_core_mask;
 };
 
 /* GPU backend implementation of kbase_hwcnt_backend_timestamp_ns_fn */
 static u64 kbasep_hwcnt_backend_gpu_timestamp_ns(
 	struct kbase_hwcnt_backend *backend)
 {
-	struct timespec64 ts;
+	struct timespec ts;
 
 	(void)backend;
-	ktime_get_raw_ts64(&ts);
+	getrawmonotonic(&ts);
 	return (u64)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 }
 
@@ -116,6 +118,7 @@ static int kbasep_hwcnt_backend_gpu_dump_enable_nolock(
 	if (errcode)
 		goto error;
 
+	backend_gpu->pm_core_mask = kbase_pm_ca_get_instr_core_mask(kbdev);
 	backend_gpu->enabled = true;
 
 	return 0;
@@ -225,7 +228,8 @@ static int kbasep_hwcnt_backend_gpu_dump_get(
 		backend_gpu->kctx, backend_gpu->vmap, KBASE_SYNC_TO_CPU);
 
 	return kbase_hwcnt_gpu_dump_get(
-		dst, backend_gpu->cpu_dump_va, dst_enable_map, accumulate);
+		dst, backend_gpu->cpu_dump_va, dst_enable_map,
+		backend_gpu->pm_core_mask, accumulate);
 }
 
 /**

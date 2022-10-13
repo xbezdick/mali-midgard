@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2013-2015,2017-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2013-2015,2017-2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 #include <linux/dma-mapping.h>
@@ -65,7 +64,7 @@ int kbasep_10969_workaround_clamp_coordinates(struct kbase_jd_atom *katom)
 	kbase_gpu_vm_lock(katom->kctx);
 	region = kbase_region_tracker_find_region_enclosing_address(katom->kctx,
 			katom->jc);
-	if (!region || (region->flags & KBASE_REG_FREE))
+	if (kbase_is_region_invalid_or_free(region))
 		goto out_unlock;
 
 	page_array = kbase_get_cpu_phy_pages(region);

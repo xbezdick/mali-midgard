@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
- * (C) COPYRIGHT 2011-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2018, 2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -188,6 +187,20 @@ enum {
  * about invalid priorities from userspace.
  */
 #define KBASE_JS_ATOM_SCHED_PRIO_DEFAULT KBASE_JS_ATOM_SCHED_PRIO_MED
+
+/* Atom priority bitmaps, where bit 0 is the highest priority, and higher bits
+ * indicate successively lower KBASE_JS_ATOM_SCHED_PRIO_<...> levels.
+ *
+ * Must be strictly larger than the number of bits to represent a bitmap of
+ * priorities, so that we can do calculations such as:
+ *   (1 << KBASE_JS_ATOM_SCHED_PRIO_COUNT) - 1
+ * ...without causing undefined behavior due to a shift beyond the width of the
+ * type
+ *
+ * If KBASE_JS_ATOM_SCHED_PRIO_COUNT starts requiring 32 bits, then it's worth
+ * moving to DECLARE_BITMAP()
+ */
+typedef u8 kbase_js_prio_bitmap_t;
 
 /**
  * @brief KBase Device Data Job Scheduler sub-structure
@@ -408,6 +421,24 @@ struct kbasep_js_atom_retained_state {
  */
 #define KBASEP_JS_TICK_RESOLUTION_US 1
 
+/**
+ * struct kbase_jsctx_slot_tracking - Job Scheduling tracking of a context's
+ *                                    use of a job slot
+ * @blocked: bitmap of priorities that this slot is blocked at
+ * @atoms_pulled: counts of atoms that have been pulled from this slot,
+ *                across all priority levels
+ * @atoms_pulled_pri: counts of atoms that have been pulled from this slot, per
+ *                    priority level
+ *
+ * Controls how a slot from the &struct kbase_context's jsctx_queue is managed,
+ * for example to ensure correct ordering of atoms when atoms of different
+ * priorities are unpulled.
+ */
+struct kbase_jsctx_slot_tracking {
+	kbase_js_prio_bitmap_t blocked;
+	atomic_t atoms_pulled;
+	int atoms_pulled_pri[KBASE_JS_ATOM_SCHED_PRIO_COUNT];
+};
 
 	  /** @} *//* end group kbase_js */
 	  /** @} *//* end group base_kbase_api */

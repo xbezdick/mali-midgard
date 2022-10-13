@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2014-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -56,14 +55,8 @@ int kbase_backend_early_init(struct kbase_device *kbdev)
 	if (err)
 		goto fail_interrupts;
 
-	err = kbase_hwaccess_pm_early_init(kbdev);
-	if (err)
-		goto fail_pm;
-
 	return 0;
 
-fail_pm:
-	kbase_release_interrupts(kbdev);
 fail_interrupts:
 	kbase_pm_runtime_term(kbdev);
 fail_runtime_pm:
@@ -74,7 +67,6 @@ fail_runtime_pm:
 
 void kbase_backend_early_term(struct kbase_device *kbdev)
 {
-	kbase_hwaccess_pm_early_term(kbdev);
 	kbase_release_interrupts(kbdev);
 	kbase_pm_runtime_term(kbdev);
 	kbasep_platform_device_term(kbdev);
@@ -84,7 +76,7 @@ int kbase_backend_late_init(struct kbase_device *kbdev)
 {
 	int err;
 
-	err = kbase_hwaccess_pm_late_init(kbdev);
+	err = kbase_hwaccess_pm_init(kbdev);
 	if (err)
 		return err;
 
@@ -110,10 +102,26 @@ int kbase_backend_late_init(struct kbase_device *kbdev)
 	if (err)
 		goto fail_job_slot;
 
+	/* Do the initialisation of devfreq.
+	 * Devfreq needs backend_timer_init() for completion of its
+	 * initialisation and it also needs to catch the first callback
+	 * occurence of the runtime_suspend event for maintaining state
+	 * coherence with the backend power management, hence needs to be
+	 * placed before the kbase_pm_context_idle().
+	 */
+	err = kbase_backend_devfreq_init(kbdev);
+	if (err)
+		goto fail_devfreq_init;
+
+	/* Idle the GPU and/or cores, if the policy wants it to */
+	kbase_pm_context_idle(kbdev);
+
 	init_waitqueue_head(&kbdev->hwaccess.backend.reset_wait);
 
 	return 0;
 
+fail_devfreq_init:
+	kbase_job_slot_term(kbdev);
 fail_job_slot:
 
 #ifdef CONFIG_MALI_DEBUG
@@ -126,16 +134,17 @@ fail_interrupt_test:
 fail_timer:
 	kbase_hwaccess_pm_halt(kbdev);
 fail_pm_powerup:
-	kbase_hwaccess_pm_late_term(kbdev);
+	kbase_hwaccess_pm_term(kbdev);
 
 	return err;
 }
 
 void kbase_backend_late_term(struct kbase_device *kbdev)
 {
+	kbase_backend_devfreq_term(kbdev);
 	kbase_job_slot_halt(kbdev);
 	kbase_job_slot_term(kbdev);
 	kbase_backend_timer_term(kbdev);
 	kbase_hwaccess_pm_halt(kbdev);
-	kbase_hwaccess_pm_late_term(kbdev);
+	kbase_hwaccess_pm_term(kbdev);
 }

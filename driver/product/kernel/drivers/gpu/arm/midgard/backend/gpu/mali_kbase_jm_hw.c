@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2010-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2010-2019, 2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -714,40 +713,22 @@ void kbasep_job_slot_soft_or_hard_stop_do_action(struct kbase_device *kbdev,
 #endif
 }
 
-void kbase_backend_jm_kill_jobs_from_kctx(struct kbase_context *kctx)
+void kbase_backend_jm_kill_running_jobs_from_kctx(struct kbase_context *kctx)
 {
-	unsigned long flags;
-	struct kbase_device *kbdev;
+	struct kbase_device *kbdev = kctx->kbdev;
 	int i;
 
-	KBASE_DEBUG_ASSERT(kctx != NULL);
-	kbdev = kctx->kbdev;
-	KBASE_DEBUG_ASSERT(kbdev != NULL);
-
-	/* Cancel any remaining running jobs for this kctx  */
-	mutex_lock(&kctx->jctx.lock);
-	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
-
-	/* Invalidate all jobs in context, to prevent re-submitting */
-	for (i = 0; i < BASE_JD_ATOM_COUNT; i++) {
-		if (!work_pending(&kctx->jctx.atoms[i].work))
-			kctx->jctx.atoms[i].event_code =
-						BASE_JD_EVENT_JOB_CANCELLED;
-	}
+	lockdep_assert_held(&kbdev->hwaccess_lock);
 
 	for (i = 0; i < kbdev->gpu_props.num_job_slots; i++)
 		kbase_job_slot_hardstop(kctx, i, NULL);
-
-	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
-	mutex_unlock(&kctx->jctx.lock);
 }
 
 void kbase_job_slot_ctx_priority_check_locked(struct kbase_context *kctx,
 				struct kbase_jd_atom *target_katom)
 {
 	struct kbase_device *kbdev;
-	int js = target_katom->slot_nr;
-	int priority = target_katom->sched_priority;
+	int target_js = target_katom->slot_nr;
 	int i;
 	bool stop_sent = false;
 
@@ -757,24 +738,19 @@ void kbase_job_slot_ctx_priority_check_locked(struct kbase_context *kctx,
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
 
-	for (i = 0; i < kbase_backend_nr_atoms_on_slot(kbdev, js); i++) {
-		struct kbase_jd_atom *katom;
+	for (i = 0; i < kbase_backend_nr_atoms_on_slot(kbdev, target_js); i++) {
+		struct kbase_jd_atom *slot_katom;
 
-		katom = kbase_gpu_inspect(kbdev, js, i);
-		if (!katom)
+		slot_katom = kbase_gpu_inspect(kbdev, target_js, i);
+		if (!slot_katom)
 			continue;
 
-		if ((kbdev->js_ctx_scheduling_mode ==
-			KBASE_JS_PROCESS_LOCAL_PRIORITY_MODE) &&
-				(katom->kctx != kctx))
-			continue;
-
-		if (katom->sched_priority > priority) {
+		if (kbase_js_atom_runs_before(kbdev, target_katom, slot_katom)) {
 			if (!stop_sent)
 				KBASE_TLSTREAM_TL_ATTRIB_ATOM_PRIORITIZED(
 						target_katom);
 
-			kbase_job_slot_softstop(kbdev, js, katom);
+			kbase_job_slot_softstop(kbdev, target_js, slot_katom);
 			stop_sent = true;
 		}
 	}
@@ -1309,7 +1285,7 @@ static void kbasep_try_reset_gpu_early_locked(struct kbase_device *kbdev)
 	/* To prevent getting incorrect registers when dumping failed job,
 	 * skip early reset.
 	 */
-	if (kbdev->job_fault_debug != false)
+	if (atomic_read(&kbdev->job_fault_debug) > 0)
 		return;
 
 	/* Check that the reset has been committed to (i.e. kbase_reset_gpu has

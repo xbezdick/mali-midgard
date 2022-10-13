@@ -3,7 +3,7 @@
  * ----------------------------------------------------------------------------
  * This confidential and proprietary software may be used only as authorized
  * by a licensing agreement from ARM Limited.
- *      (C) COPYRIGHT 2017-2018 ARM Limited, ALL RIGHTS RESERVED
+ *      (C) COPYRIGHT 2017-2018, 2020 ARM Limited, ALL RIGHTS RESERVED
  * The entire notice above must be reproduced on all authorized copies and
  * copies may only be made to the extent permitted by a licensing agreement
  * from ARM Limited.
@@ -101,6 +101,11 @@ bob_kernel_module {
     },
     mali_2mb_alloc: {
         kbuild_options: ["CONFIG_MALI_2MB_ALLOC=y"],
+    },
+    gpu_has_job_manager: {
+        srcs: [
+            "jm/*.h",
+        ],
     },
     gpu_has_csf: {
         srcs: [

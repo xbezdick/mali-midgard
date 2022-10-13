@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2013-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2013-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -179,6 +178,13 @@ static int debug_mem_zone_open(struct rb_root *rbtree,
 			/* Empty region - ignore */
 			continue;
 
+		if (reg->flags & KBASE_REG_SECURE) {
+			/* CPU access to protected memory is forbidden - so
+			 * skip this GPU virtual region.
+			 */
+			continue;
+		}
+
 		mapping = kmalloc(sizeof(*mapping), GFP_KERNEL);
 		if (!mapping) {
 			ret = -ENOMEM;
@@ -285,6 +291,7 @@ static int debug_mem_release(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations kbase_debug_mem_view_fops = {
+	.owner = THIS_MODULE,
 	.open = debug_mem_open,
 	.release = debug_mem_release,
 	.read = seq_read,

@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2013-2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2013-2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,8 +17,6 @@
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
 
 /*
@@ -27,6 +26,9 @@
 #include <mali_kbase.h>
 #include <mali_kbase_pm.h>
 #include <backend/gpu/mali_kbase_pm_internal.h>
+#ifdef CONFIG_MALI_NO_MALI
+#include <backend/gpu/mali_kbase_model_dummy.h>
+#endif
 
 int kbase_pm_ca_init(struct kbase_device *kbdev)
 {
@@ -75,14 +77,11 @@ unlock:
 
 u64 kbase_pm_ca_get_core_mask(struct kbase_device *kbdev)
 {
+#ifdef CONFIG_MALI_DEVFREQ
 	struct kbase_pm_backend_data *pm_backend = &kbdev->pm.backend;
+#endif
 
 	lockdep_assert_held(&kbdev->hwaccess_lock);
-
-	/* All cores must be enabled when instrumentation is in use */
-	if (pm_backend->instr_enabled)
-		return kbdev->gpu_props.props.raw_props.shader_present &
-				kbdev->pm.debug_core_mask_all;
 
 #ifdef CONFIG_MALI_DEVFREQ
 	return pm_backend->ca_cores_enabled & kbdev->pm.debug_core_mask_all;
@@ -94,14 +93,13 @@ u64 kbase_pm_ca_get_core_mask(struct kbase_device *kbdev)
 
 KBASE_EXPORT_TEST_API(kbase_pm_ca_get_core_mask);
 
-void kbase_pm_ca_instr_enable(struct kbase_device *kbdev)
+u64 kbase_pm_ca_get_instr_core_mask(struct kbase_device *kbdev)
 {
 	lockdep_assert_held(&kbdev->hwaccess_lock);
-	kbdev->pm.backend.instr_enabled = true;
-}
 
-void kbase_pm_ca_instr_disable(struct kbase_device *kbdev)
-{
-	lockdep_assert_held(&kbdev->hwaccess_lock);
-	kbdev->pm.backend.instr_enabled = false;
+#ifdef CONFIG_MALI_NO_MALI
+	return (((1ull) << KBASE_DUMMY_MODEL_MAX_SHADER_CORES) - 1);
+#else
+	return kbdev->pm.backend.pm_shaders_core_mask;
+#endif
 }

@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
- * (C) COPYRIGHT 2014-2015, 2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2015, 2018-2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -48,39 +47,16 @@ struct kbase_device;
  *
  * Return: 0 if the power management framework was successfully initialized.
  */
-int kbase_hwaccess_pm_early_init(struct kbase_device *kbdev);
-
-/**
- * Initialize the power management framework.
- *
- * Must be called before any other power management function (except
- * @ref kbase_hwaccess_pm_early_init)
- *
- * @kbdev: The kbase device structure for the device (must be a valid pointer)
- *
- * Return: 0 if the power management framework was successfully initialized.
- */
-int kbase_hwaccess_pm_late_init(struct kbase_device *kbdev);
+int kbase_hwaccess_pm_init(struct kbase_device *kbdev);
 
 /**
  * Terminate the power management framework.
  *
- * No power management functions may be called after this (except
- * @ref kbase_pm_init)
+ * No power management functions may be called after this
  *
  * @kbdev: The kbase device structure for the device (must be a valid pointer)
  */
-void kbase_hwaccess_pm_early_term(struct kbase_device *kbdev);
-
-/**
- * Terminate the power management framework.
- *
- * No power management functions may be called after this (except
- * @ref kbase_hwaccess_pm_early_term or @ref kbase_hwaccess_pm_late_init)
- *
- * @kbdev: The kbase device structure for the device (must be a valid pointer)
- */
-void kbase_hwaccess_pm_late_term(struct kbase_device *kbdev);
+void kbase_hwaccess_pm_term(struct kbase_device *kbdev);
 
 /**
  * kbase_hwaccess_pm_powerup - Power up the GPU.

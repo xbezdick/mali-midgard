@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *
- * (C) COPYRIGHT 2014-2015, 2017 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2015, 2017, 2019 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -77,16 +76,24 @@ void kbase_mem_pool_debugfs_init(struct dentry *parent,
 		struct kbase_mem_pool *pool,
 		struct kbase_mem_pool *lp_pool)
 {
-	debugfs_create_file("mem_pool_size", S_IRUGO | S_IWUSR, parent,
+	/* prevent unprivileged use of debug file in old kernel version */
+#if (KERNEL_VERSION(4, 7, 0) <= LINUX_VERSION_CODE)
+	/* only for newer kernel version debug file system is safe */
+	const mode_t mode = 0644;
+#else
+	const mode_t mode = 0600;
+#endif
+
+	debugfs_create_file("mem_pool_size", mode, parent,
 			pool, &kbase_mem_pool_debugfs_size_fops);
 
-	debugfs_create_file("mem_pool_max_size", S_IRUGO | S_IWUSR, parent,
+	debugfs_create_file("mem_pool_max_size", mode, parent,
 			pool, &kbase_mem_pool_debugfs_max_size_fops);
 
-	debugfs_create_file("lp_mem_pool_size", S_IRUGO | S_IWUSR, parent,
+	debugfs_create_file("lp_mem_pool_size", mode, parent,
 			lp_pool, &kbase_mem_pool_debugfs_size_fops);
 
-	debugfs_create_file("lp_mem_pool_max_size", S_IRUGO | S_IWUSR, parent,
+	debugfs_create_file("lp_mem_pool_max_size", mode, parent,
 			lp_pool, &kbase_mem_pool_debugfs_max_size_fops);
 }
 
